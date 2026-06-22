@@ -12,3 +12,6 @@
 
 # Local env
 .env
+
+# SDD scratch (ledger, briefs, reports)
+.superpowers/
