@@ -1,0 +1,52 @@
+# Reference workflow for the svidmint repo: gate svidmint's own release with assayward.
+# Copy to svidmint/.github/workflows/assayward-gate.yml
+# (svidmint's release.yaml currently has a commented-out forgeseal block — REQ-078;
+#  this is its activated, assayward-gated form.)
+name: assayward-trust-gate
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24' }
+
+      # 1. forgeseal attests svidmint's release binary.
+      - uses: sns45/forgeseal@main
+        with:
+          command: pipeline
+          dir: .
+          output-dir: ./forgeseal-output
+          sign: 'true'
+          attest: 'true'
+          vex-triage: 'true'
+
+      # 2. svidmint mints its OWN publisher SVID (self-hosted, dogfood server).
+      - name: mint publisher SVID
+        env:
+          SVIDMINT_URL: ${{ vars.SVIDMINT_URL }}
+        run: |
+          OIDC=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$ARTIFACT_DIGEST" | jq -r .value)
+          curl -sf -X POST "$SVIDMINT_URL/v1/attest" \
+            -d "{\"evidence_type\":\"github_oidc\",\"svid_type\":\"jwt\",\"audience\":[\"$ARTIFACT_DIGEST\"],\"evidence\":\"$(echo -n "{\"oidc_token\":\"$OIDC\"}" | base64 -w0)\"}" \
+            | jq -r .token > ./svid.jwt
+          curl -sf "$SVIDMINT_URL/v1/jwks" > ./jwks.json
+
+      # 3. assayward gates the release on `allow`.
+      - uses: sns45/assayward-action@v0.1
+        with:
+          forgeseal-output: ./forgeseal-output
+          image: svidmint-artifact@${{ env.ARTIFACT_DIGEST }}
+          svid: ./svid.jwt
+          spiffe-bundle: ci.svidmint.dev=./jwks.json
+          policy-file: ./policy-dogfood.yaml

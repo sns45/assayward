@@ -1,0 +1,53 @@
+# Reference workflow for the forgeseal repo: gate forgeseal's own release with assayward.
+# Copy to forgeseal/.github/workflows/assayward-gate.yml
+name: assayward-trust-gate
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # for the svidmint publisher SVID (GitHub OIDC -> SVID)
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.23' }
+
+      # 1. Build forgeseal and produce its own supply-chain artifacts.
+      - name: forgeseal pipeline (self-attest)
+        run: |
+          make build
+          ./bin/forgeseal attest --subject ./bin/forgeseal --sign \
+            -o ./forgeseal-output/forgeseal.intoto.jsonl
+          ./bin/forgeseal sbom --dir . --output ./forgeseal-output/sbom.cdx.json
+          ./bin/forgeseal vex triage --sbom ./forgeseal-output/sbom.cdx.json \
+            --format openvex --output ./forgeseal-output/vex.openvex.json || true
+
+      # 2. Obtain a svidmint publisher SVID for this release job (GitHub OIDC -> JWT-SVID).
+      #    Requires a reachable svidmint server + a registration entry for this repo.
+      - name: mint publisher SVID (svidmint)
+        env:
+          SVIDMINT_URL: ${{ vars.SVIDMINT_URL }}
+        run: |
+          OIDC=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$ARTIFACT_DIGEST" | jq -r .value)
+          curl -sf -X POST "$SVIDMINT_URL/v1/attest" \
+            -d "{\"evidence_type\":\"github_oidc\",\"svid_type\":\"jwt\",\"audience\":[\"$ARTIFACT_DIGEST\"],\"evidence\":\"$(echo -n "{\"oidc_token\":\"$OIDC\"}" | base64 -w0)\"}" \
+            | jq -r .token > ./svid.jwt
+          curl -sf "$SVIDMINT_URL/v1/jwks" > ./jwks.json
+
+      # 3. Install assayward and gate the release.
+      - uses: sns45/assayward-action@v0.1
+        with:
+          forgeseal-output: ./forgeseal-output
+          image: forgeseal-artifact@${{ env.ARTIFACT_DIGEST }}
+          svid: ./svid.jwt
+          spiffe-bundle: ci.svidmint.dev=./jwks.json
+          policy-file: ./policy-dogfood.yaml   # the slsa-l3 / forgeseal-dogfood policy
+      # The action exits non-zero on `deny`, failing the release gate.
