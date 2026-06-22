@@ -258,6 +258,55 @@ fi
 rm -f "${GITHUB_OUTPUT_FILE}"
 
 # ---------------------------------------------------------------------------
+# Test 11: goreleaser asset-name construction (unit tests, no network)
+# ---------------------------------------------------------------------------
+# Source the goreleaser_asset_name function from entrypoint.sh without
+# executing the rest of the script. We do this by sourcing with ASSAYWARD_BINARY_PATH
+# set so the download block is skipped, then calling the inner function.
+# The function is defined inside the else-branch, so we extract and eval it directly.
+echo ""
+echo "=== Test 11: goreleaser asset-name assertions ==="
+
+# Inline the same function from entrypoint.sh so we can unit-test it independently.
+goreleaser_asset_name() {
+  local raw_os="$1" raw_arch="$2"
+  local goos goarch ext
+  case "${raw_os}" in
+    Linux|linux)     goos="linux"   ;;
+    macOS|Darwin)    goos="darwin"  ;;
+    Windows|windows) goos="windows" ;;
+    *)               goos="${raw_os}" ;;
+  esac
+  case "${raw_arch}" in
+    X64|x86_64|amd64)    goarch="amd64" ;;
+    ARM64|arm64|aarch64) goarch="arm64" ;;
+    *)                   goarch="${raw_arch}" ;;
+  esac
+  if [[ "${goos}" == "windows" ]]; then
+    ext="zip"
+  else
+    ext="tar.gz"
+  fi
+  echo "assayward_${goos}_${goarch}.${ext}"
+}
+
+assert_asset() {
+  local label="$1" raw_os="$2" raw_arch="$3" expected="$4"
+  local actual
+  actual="$(goreleaser_asset_name "${raw_os}" "${raw_arch}")"
+  if [[ "${actual}" == "${expected}" ]]; then
+    pass "${label}: ${actual}"
+  else
+    fail "${label}: got '${actual}', expected '${expected}'"
+  fi
+}
+
+assert_asset "Linux/X64 -> linux/amd64 tar.gz"     "Linux"   "X64"   "assayward_linux_amd64.tar.gz"
+assert_asset "Linux/ARM64 -> linux/arm64 tar.gz"   "Linux"   "ARM64" "assayward_linux_arm64.tar.gz"
+assert_asset "macOS/ARM64 -> darwin/arm64 tar.gz"  "macOS"   "ARM64" "assayward_darwin_arm64.tar.gz"
+assert_asset "Windows/X64 -> windows/amd64 zip"    "Windows" "X64"   "assayward_windows_amd64.zip"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

@@ -20,24 +20,36 @@ else
   # Download the goreleaser release asset.
   VERSION="${ASSAYWARD_VERSION:-latest}"
 
-  # Normalise RUNNER_OS (GitHub Actions sets this to Linux / macOS / Windows).
-  # Goreleaser archives use lowercase OS names.
+  # Normalise RUNNER_OS / RUNNER_ARCH (GitHub Actions) to goreleaser naming.
+  # Goreleaser .Os  = lowercase GOOS  (linux / darwin / windows)
+  # Goreleaser .Arch = GOARCH         (amd64 / arm64)
+  # Archive format : tar.gz for linux/darwin; zip for windows (format_overrides)
   RAW_OS="${RUNNER_OS:-Linux}"
   RAW_ARCH="${RUNNER_ARCH:-X64}"
 
-  case "${RAW_OS}" in
-    Linux|linux)     GOOS="Linux" ;;
-    macOS|Darwin)    GOOS="Darwin" ;;
-    Windows|windows) GOOS="Windows" ;;
-    *)               GOOS="${RAW_OS}" ;;
-  esac
+  goreleaser_asset_name() {
+    local raw_os="$1" raw_arch="$2"
+    local goos goarch ext
+    case "${raw_os}" in
+      Linux|linux)     goos="linux"   ;;
+      macOS|Darwin)    goos="darwin"  ;;
+      Windows|windows) goos="windows" ;;
+      *)               goos="${raw_os}" ;;
+    esac
+    case "${raw_arch}" in
+      X64|x86_64|amd64)    goarch="amd64" ;;
+      ARM64|arm64|aarch64) goarch="arm64" ;;
+      *)                   goarch="${raw_arch}" ;;
+    esac
+    if [[ "${goos}" == "windows" ]]; then
+      ext="zip"
+    else
+      ext="tar.gz"
+    fi
+    echo "assayward_${goos}_${goarch}.${ext}"
+  }
 
-  # Goreleaser GOARCH naming: amd64 for X64, arm64 for ARM64.
-  case "${RAW_ARCH}" in
-    X64|x86_64|amd64)   GOARCH="x86_64" ;;
-    ARM64|arm64|aarch64) GOARCH="arm64" ;;
-    *)                   GOARCH="${RAW_ARCH}" ;;
-  esac
+  ARCHIVE_NAME="$(goreleaser_asset_name "${RAW_OS}" "${RAW_ARCH}")"
 
   # Resolve "latest" to a concrete tag via GitHub API.
   if [[ "${VERSION}" == "latest" ]]; then
@@ -49,8 +61,9 @@ else
   fi
 
   # Build the goreleaser archive URL.
-  # Convention: assayward_<OS>_<ARCH>.tar.gz (e.g. assayward_Linux_x86_64.tar.gz)
-  ARCHIVE_NAME="assayward_${GOOS}_${GOARCH}.tar.gz"
+  # Convention: assayward_<goos>_<goarch>.<ext>
+  # Examples: assayward_linux_amd64.tar.gz, assayward_darwin_arm64.tar.gz,
+  #           assayward_windows_amd64.zip
   DOWNLOAD_URL="https://github.com/sns45/assayward/releases/download/${VERSION}/${ARCHIVE_NAME}"
 
   TMPDIR="$(mktemp -d)"
@@ -58,7 +71,14 @@ else
 
   echo "assayward: downloading ${DOWNLOAD_URL}"
   curl -fsSL "${DOWNLOAD_URL}" -o "${TMPDIR}/${ARCHIVE_NAME}"
-  tar -xzf "${TMPDIR}/${ARCHIVE_NAME}" -C "${TMPDIR}"
+
+  # Extract: tar.gz for linux/darwin; unzip for windows.
+  if [[ "${ARCHIVE_NAME}" == *.zip ]]; then
+    unzip -q "${TMPDIR}/${ARCHIVE_NAME}" -d "${TMPDIR}"
+  else
+    tar -xzf "${TMPDIR}/${ARCHIVE_NAME}" -C "${TMPDIR}"
+  fi
+
   ASSAYWARD_BIN="${TMPDIR}/assayward"
   chmod +x "${ASSAYWARD_BIN}"
   echo "assayward: installed ${VERSION} at ${ASSAYWARD_BIN}"
