@@ -150,3 +150,22 @@ func TestVerifyBogusOutputExits2(t *testing.T) {
 		t.Errorf("bogus --output: expected empty stdout on error path, got: %s", stdout)
 	}
 }
+
+// TestVerifyNoAttestationSourceExits2 verifies that when neither --bundle nor
+// --from-oci is supplied, verify exits with code 2 and emits no JSON to stdout.
+func TestVerifyNoAttestationSourceExits2(t *testing.T) {
+	// Intentionally omit --bundle and --from-oci.
+	args := []string{
+		"verify",
+		"--image", "ghcr.io/sns45/example:1.0.0@" + testfix.TestImageDigest,
+		"--policy", "baseline",
+	}
+
+	code, stdout := runVerify(t, args)
+	if code != ExitError {
+		t.Errorf("no attestation source: exit code = %d, want %d (error)", code, ExitError)
+	}
+	if stdout != "" {
+		t.Errorf("no attestation source: expected empty stdout on error path, got: %s", stdout)
+	}
+}

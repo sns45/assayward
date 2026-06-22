@@ -16,6 +16,7 @@ import (
 // subcommands. It is populated by registerEvalFlags and consumed by build().
 type evalInputs struct {
 	Bundles       []string
+	FromOCI       string // --from-oci: image ref for OCI referrers discovery (explicit opt-in, v0.1)
 	Policy        string
 	PolicyFile    string
 	Image         string
@@ -29,6 +30,10 @@ type evalInputs struct {
 // the evalInputs receiver. Call this once per subcommand that needs input assembly.
 func registerEvalFlags(cmd *cobra.Command, o *evalInputs) {
 	cmd.Flags().StringArrayVar(&o.Bundles, "bundle", nil, "local attestation file path (repeatable)")
+	// --from-oci is explicit opt-in for OCI referrers discovery (Decision 2, v0.1).
+	// Auto-discovery from a plain image tag without an explicit --from-oci is a
+	// future refinement; callers must supply the digest-pinned ref themselves.
+	cmd.Flags().StringVar(&o.FromOCI, "from-oci", "", "image ref (name@sha256:<hex>) to discover attestations via OCI referrers API")
 	cmd.Flags().StringVar(&o.Policy, "policy", "", "built-in policy name: baseline|slsa-l3|serverless-edge")
 	cmd.Flags().StringVar(&o.PolicyFile, "policy-file", "", "path to a TrustPolicy YAML file")
 	cmd.Flags().StringVar(&o.Image, "image", "", "image ref as name@sha256:<hex> (required)")
@@ -111,12 +116,35 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 	// ----------------------------------------------------------
 	// 3. Assemble Evidence
 	// ----------------------------------------------------------
+
+	// Require at least one attestation source so that a mis-configured invocation
+	// fails fast with exit 2 rather than silently producing a "deny" decision with
+	// no evidence. Auto-discovery (inferring --from-oci from --image) is a future
+	// refinement; v0.1 requires an explicit --bundle or --from-oci.
+	if len(o.Bundles) == 0 && o.FromOCI == "" {
+		return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+			Code: ExitError,
+			Msg:  fmt.Sprintf("%s: at least one attestation source is required: supply --bundle and/or --from-oci", cmdName),
+		}
+	}
+
 	atts, err := discover.FromBundles(o.Bundles)
 	if err != nil {
 		return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
 			Code: ExitError,
 			Msg:  fmt.Sprintf("%s: %v", cmdName, err),
 		}
+	}
+
+	if o.FromOCI != "" {
+		ociAtts, err := discover.FromOCI(o.FromOCI)
+		if err != nil {
+			return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+				Code: ExitError,
+				Msg:  fmt.Sprintf("%s: --from-oci: %v", cmdName, err),
+			}
+		}
+		atts = append(atts, ociAtts...)
 	}
 
 	ev := core.Evidence{

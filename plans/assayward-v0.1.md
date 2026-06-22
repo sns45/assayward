@@ -78,9 +78,10 @@ assayward/
 ├── Makefile                            # build native + wasip1 + js/wasm; test; golden -update
 ├── pkg/core/
 │   ├── model.go                        # FROZEN CONTRACT: Evidence, Attestation, WorkloadIdentity,
-│   │                                   #   Decision, Reason, EvidenceSummary, ImageRef + enums
+│   │                                   #   Decision, Reason, EvidenceSummary, ImageRef, TrustRoots + enums
 │   ├── clock.go                        # injected time interface (no clock reads in core)
-│   ├── evaluate.go                     # Evaluate(Evidence, Policy, TrustRoots) Decision — top-level orchestration
+│   ├── engine/                         # composition root (imports core+verify+policy; nothing imports it back)
+│   │   └── engine.go                   # engine.Evaluate(Evidence, policy.Policy, TrustRoots, Clock) Decision
 │   ├── verify/
 │   │   ├── dsse.go                     # DSSE decode via go-securesystemslib (Wasm-clean)
 │   │   ├── signature.go               # SignatureVerifier interface + result type
@@ -218,6 +219,13 @@ type Decision struct {
 	Evidence  EvidenceSummary `json:"evidence"`
 	DecidedAt time.Time       `json:"decidedAt"` // from injected Clock
 }
+
+// TrustRoots carries injected trust material (Fulcio/Rekor roots, SPIFFE bundles).
+// Opaque to the policy layer; consumed only by verify stages.
+type TrustRoots struct {
+	SigstoreTUF   []byte            `json:"sigstoreTUF,omitempty"`
+	SPIFFEBundles map[string][]byte `json:"spiffeBundles,omitempty"` // trustDomain -> JWKS/PEM
+}
 ```
 
 ```go
@@ -277,28 +285,41 @@ func TestFixedClock(t *testing.T) {
 
 ---
 
-### Task 1.2 — Top-level `Evaluate` orchestration skeleton
+### Task 1.2 — `engine.Evaluate` composition-root skeleton
 
-**Files:** Create `pkg/core/evaluate.go`; Test `pkg/core/evaluate_test.go`
+**Files:** Create `pkg/core/engine/engine.go`; Test `pkg/core/engine/engine_test.go`
+
+> **Architecture note (frozen):** `engine` is the composition root. It imports `core` (model), `verify`, and `policy`. **Nothing imports `engine` back** — this is what avoids the import cycle (`policy`/`verify` import `core`; only `engine` and adapters import `policy`/`verify`). `TrustRoots` lives in `core` (model.go, Task 1.1), not here.
 
 **Interfaces — Produces:**
 ```go
-// pkg/core/evaluate.go
-package core
-// TrustRoots carries injected trust material (Fulcio/Rekor roots, SPIFFE bundles) — opaque to policy.
+// pkg/core/engine/engine.go
+package engine
+
+import (
+	core "github.com/sns45/assayward/pkg/core"
+	"github.com/sns45/assayward/pkg/core/policy"
+)
+
+// Evaluate is the single entry point used by every surface (CLI, wasm shim, webhook).
+// Pure: no I/O, time via clk.
+func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk core.Clock) core.Decision
+```
+(`core.TrustRoots` is defined in Task 1.1's model.go:)
+```go
+// in pkg/core/model.go
 type TrustRoots struct {
-	SigstoreTUF []byte            `json:"sigstoreTUF,omitempty"`
+	SigstoreTUF   []byte            `json:"sigstoreTUF,omitempty"`
 	SPIFFEBundles map[string][]byte `json:"spiffeBundles,omitempty"` // trustDomain -> JWKS/PEM
 }
-// Evaluate is the single entry point. Pure: no I/O, time via clk.
-func Evaluate(ev Evidence, pol Policy, roots TrustRoots, clk Clock) Decision
 ```
-- Consumes: `Policy` (Task 1.10), verify stages (Tasks 1.3–1.7).
-- [ ] Step 1: Failing test asserting `Evaluate` with an empty enforce policy returns `ResultAllow` and `DecidedAt == clk.Now()`.
-- [ ] Step 2: `go test ./pkg/core/ -run TestEvaluateEmpty` → FAIL.
-- [ ] Step 3: Minimal `Evaluate`: build `EvidenceSummary`, run no checks, return allow with `Policy = pol.Name+"@"+pol.Version`, `Reasons` sorted. (Wire stages in later tasks.)
-- [ ] Step 4: `go test ./pkg/core/ -run TestEvaluateEmpty -v` → PASS.
-- [ ] Step 5: Commit — `git commit -m "M1: Evaluate orchestration skeleton"`
+- Consumes: `policy.Policy` (Task 1.10), verify stages (Tasks 1.3–1.7).
+- [ ] Step 1: Failing test asserting `Evaluate` with an empty enforce policy returns `core.ResultAllow` and `DecidedAt == clk.Now()`.
+- [ ] Step 2: `go test ./pkg/core/engine/ -run TestEvaluateEmpty` → FAIL.
+- [ ] Step 3: Minimal `Evaluate`: build `core.EvidenceSummary`, run no checks, return allow with `Policy = pol.Name+"@"+pol.Version`, `Reasons` sorted. (Wire stages in Task 1.14.)
+- [ ] Step 4: `go test ./pkg/core/engine/ -run TestEvaluateEmpty -v` → PASS.
+- [ ] Step 5: `GOOS=wasip1 GOARCH=wasm go build ./pkg/core/engine/` → success.
+- [ ] Step 6: Commit — `git commit -m "M1: engine.Evaluate composition-root skeleton"`
 
 ---
 
@@ -440,7 +461,7 @@ func Parse(b []byte) (Policy, error)
 - Use `yaml.UnmarshalStrict` (sigs.k8s.io/yaml or gopkg.in/yaml.v3 with KnownFields(true)) — confirm wasip1 build.
 - [ ] Step 1: Failing tests: the §5 example YAML parses; an unknown field errors; `Version` populated. Step 2–4: implement; tests PASS; wasip1 build PASS. Step 5: Commit `git commit -m "M1: strict versioned TrustPolicy parse (§5)"`.
 
-> Note: `pkg/core/evaluate.go`'s `Policy` (Task 1.2) is this `policy.Policy` re-exported or aliased; keep one type. If aliasing, `core.Policy = policy.Policy`.
+> Note: `policy.Policy` is THE policy type — one definition, no alias. `engine.Evaluate` (Task 1.2) takes `policy.Policy` directly. `policy` imports `core` for `Reason`/`Result`; `engine` imports both. No cycle.
 
 ---
 
@@ -485,8 +506,8 @@ var ErrCustomPolicyNotEnabled = errors.New("custom Rego policy is scaffolded but
 
 ### Task 1.14 — Wire `Evaluate` end-to-end + golden snapshots (test-agent + main thread)
 
-**Files:** Modify `pkg/core/evaluate.go`; Create `pkg/core/golden_test.go`, `pkg/core/testdata/golden/*.decision.json`
-- Wire `Evaluate` to run verify stages → project to `*View` → `EvaluatePolicy`. Add `-update` flag to regenerate goldens.
+**Files:** Modify `pkg/core/engine/engine.go`; Create `pkg/core/engine/golden_test.go`, `pkg/core/engine/testdata/golden/*.decision.json`
+- Wire `engine.Evaluate` to run verify stages → project to `*View` → `policy.EvaluatePolicy`. Add `-update` flag to regenerate goldens.
 - [ ] Step 1: Failing golden test: a matrix of (fixture, built-in policy) cases compared byte-for-byte to committed `*.decision.json`. Step 2: run with `-update` to generate; review; commit goldens. Step 3: `go test ./pkg/core/... ` → PASS. Step 4: Commit `git commit -m "M1: wire Evaluate end-to-end + committed golden decisions (§8)"`.
 
 ---
@@ -507,9 +528,9 @@ var ErrCustomPolicyNotEnabled = errors.New("custom Rego policy is scaffolded but
 
 **Files:** `cmd/assayward/{main,verify,explain,policy}.go`, `cmd/assayward/discover/{oci.go,bundle.go}`, `.goreleaser.yaml`.
 
-**Interfaces — Consumes:** `core.Evaluate`, `policy.Parse`, `policy/builtin`. **Produces:** exit codes — `0` allow/audit, `1` deny, `2` usage/error.
+**Interfaces — Consumes:** `engine.Evaluate`, `policy.Parse`, `policy/builtin`. **Produces:** exit codes — `0` allow/audit, `1` deny, `2` usage/error.
 
-**Sub-agent brief (cli-agent):** Build the CLI as a pure adapter — all OCI/Rekor/file I/O here, all decisions delegated to `core.Evaluate`. Discovery: implement `--bundle` (explicit, offline, testable) first, then cosign-style OCI referrers (`--from-oci`, default for an image ref). Wire trust roots from flags/files into `core.TrustRoots`. `explain` renders the `[]Reason` human-readably. goreleaser: cross-platform binaries → GitHub Releases, Homebrew tap, Scoop, nfpm deb/rpm, Docker, pkg.go.dev. **No business logic in the CLI.**
+**Sub-agent brief (cli-agent):** Build the CLI as a pure adapter — all OCI/Rekor/file I/O here, all decisions delegated to `engine.Evaluate`. Discovery: implement `--bundle` (explicit, offline, testable) first, then cosign-style OCI referrers (`--from-oci`, default for an image ref). Wire trust roots from flags/files into `core.TrustRoots`. `explain` renders the `[]Reason` human-readably. goreleaser: cross-platform binaries → GitHub Releases, Homebrew tap, Scoop, nfpm deb/rpm, Docker, pkg.go.dev. **No business logic in the CLI.**
 
 **Naming sweep (do before first public commit / before goreleaser publish):** check GitHub org/repo, pkg.go.dev, npm, Homebrew core + tap, USPTO for `assayward`. If it does not clear, swap the identifier globally (no logic depends on it): `temperward` → `runeward` → `vouchgate`.
 
@@ -536,7 +557,7 @@ evaluate(evidenceJSON, policyJSON, trustRootsJSON) -> decisionJSON
 ```
 TS: `await assay(evidence, policy, trustRoots?) -> Decision`.
 
-**Sub-agent brief (wasm-agent):** Implement the ABI shim calling `core.Evaluate`. Build `GOOS=wasip1 GOARCH=wasm` (primary) and `GOOS=js GOARCH=wasm` (secondary) from one Makefile target; version-pin the artifact to the Go release tag. The signature stage is the fail-closed stub (Decision 5) — document in `abi.md` that signature verification requires a native pre-pass or a supplied verified assertion, else `SIGNATURE_VERIFICATION_UNAVAILABLE`. **npm-agent:** thin TS wrapper, no logic; load `.wasm`, marshal JSON, return typed `Decision`; build with `bun`. Workers template `wrangler init`-able to a working gate.
+**Sub-agent brief (wasm-agent):** Implement the ABI shim calling `engine.Evaluate`. Build `GOOS=wasip1 GOARCH=wasm` (primary) and `GOOS=js GOARCH=wasm` (secondary) from one Makefile target; version-pin the artifact to the Go release tag. The signature stage is the fail-closed stub (Decision 5) — document in `abi.md` that signature verification requires a native pre-pass or a supplied verified assertion, else `SIGNATURE_VERIFICATION_UNAVAILABLE`. **npm-agent:** thin TS wrapper, no logic; load `.wasm`, marshal JSON, return typed `Decision`; build with `bun`. Workers template `wrangler init`-able to a working gate.
 
 **Verification gate:**
 1. `make wasm` produces `assayward.wasm` (wasip1) and `assayward_js.wasm` (js) — both build clean.
@@ -554,7 +575,7 @@ TS: `await assay(evidence, policy, trustRoots?) -> Decision`.
 
 **Files:** `surfaces/k8s-webhook/`, `deploy/helm/`, `deploy/kustomize/`.
 
-**Sub-agent brief (k8s-agent):** Admission webhook is a pure adapter: parse `AdmissionReview`, fetch evidence (reuse `cmd/assayward/discover`), call `core.Evaluate`, return allow/deny. **Deploy audit-mode-first** (decision recorded, always admit) per §3 migration story. Per Decision 4: identity-binding is policy-controlled — the webhook runs without svidmint (attestation-only) and adds the SPIFFE check only when `identity.required` and an SVID is present (projected SVID volume / TokenReview). Helm chart is the primary install → image on GHCR; Kustomize as fallback. **No verification/policy logic in the webhook.**
+**Sub-agent brief (k8s-agent):** Admission webhook is a pure adapter: parse `AdmissionReview`, fetch evidence (reuse `cmd/assayward/discover`), call `engine.Evaluate`, return allow/deny. **Deploy audit-mode-first** (decision recorded, always admit) per §3 migration story. Per Decision 4: identity-binding is policy-controlled — the webhook runs without svidmint (attestation-only) and adds the SPIFFE check only when `identity.required` and an SVID is present (projected SVID volume / TokenReview). Helm chart is the primary install → image on GHCR; Kustomize as fallback. **No verification/policy logic in the webhook.**
 
 **Verification gate:**
 1. `go build ./surfaces/k8s-webhook/...` succeeds.
