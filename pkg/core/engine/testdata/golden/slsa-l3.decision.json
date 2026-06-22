@@ -69,10 +69,10 @@
       "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "attestationTypes": [
-      "",
-      "",
-      "",
-      ""
+      "sigstore-bundle",
+      "https://slsa.dev/provenance/v1",
+      "https://cyclonedx.org/bom",
+      "https://openvex.dev/ns/v0.2.0"
     ],
     "identityPresent": true
   },

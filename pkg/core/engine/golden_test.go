@@ -36,10 +36,10 @@ func goldenEvidence(t *testing.T) core.Evidence {
 			Digest: testfix.TestImageDigest,
 		},
 		Attestations: []core.Attestation{
-			{Envelope: testfix.Load(t, "signature/bundle-provenance.json")},
-			{Envelope: testfix.Load(t, "slsa/valid-l3.dsse.json")},
-			{Envelope: testfix.Load(t, "sbom/cyclonedx.dsse.json")},
-			{Envelope: testfix.Load(t, "vex/affected-critical.dsse.json")},
+			{Envelope: testfix.Load(t, "signature/bundle-provenance.json"), PredicateType: "sigstore-bundle"},
+			{Envelope: testfix.Load(t, "slsa/valid-l3.dsse.json"), PredicateType: "https://slsa.dev/provenance/v1"},
+			{Envelope: testfix.Load(t, "sbom/cyclonedx.dsse.json"), PredicateType: "https://cyclonedx.org/bom"},
+			{Envelope: testfix.Load(t, "vex/affected-critical.dsse.json"), PredicateType: "https://openvex.dev/ns/v0.2.0"},
 		},
 		Identity: &core.WorkloadIdentity{
 			SVIDType: core.SVIDTypeJWT,

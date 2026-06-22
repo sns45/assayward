@@ -5,6 +5,7 @@ package engine
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	core "github.com/sns45/assayward/pkg/core"
@@ -56,8 +57,9 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	// Step 2: Predicate routing via DSSE decoding.
 	// Route by predicateType: contains "slsa.dev/provenance" -> SLSA;
 	// contains "cyclonedx" -> SBOM; contains "openvex" -> VEX.
-	// Last successful parse of each type wins (deterministic for the normal
-	// case of one attestation per predicate type).
+	// Same-type duplicate attestations: the LAST one in ev.Attestations order wins.
+	// This is intentional and deterministic given an ordered attestation slice
+	// (deterministic for the normal case of one attestation per predicate type).
 	// Attestations that fail DecodeDSSE (e.g. bare Sigstore bundles) are
 	// skipped here — they are handled by the signature verifier above.
 	// -------------------------------------------------------------------------
@@ -113,18 +115,21 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 			licenses = append(licenses, c.License)
 		}
 	}
+	sort.Strings(licenses) // defensive: order-stable regardless of component iteration order
 	sbomView := policy.SBOMView{
 		Present:  sbomResult.Present,
 		Licenses: licenses,
 	}
 
 	// VEX view — AffectedCVEs contains CVE IDs whose Statuses value == "affected".
+	// sort.Strings ensures byte-identical output regardless of map iteration order.
 	var affectedCVEs []string
 	for cve, status := range vexResult.Statuses {
 		if status == "affected" {
 			affectedCVEs = append(affectedCVEs, cve)
 		}
 	}
+	sort.Strings(affectedCVEs)
 	vexView := policy.VEXView{
 		Present:      vexResult.Present,
 		AffectedCVEs: affectedCVEs,
