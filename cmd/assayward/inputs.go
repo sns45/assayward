@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sns45/assayward/cmd/assayward/discover"
+	"github.com/sns45/assayward/internal/discover"
 	core "github.com/sns45/assayward/pkg/core"
 	"github.com/sns45/assayward/pkg/core/policy"
 )

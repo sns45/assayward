@@ -17,7 +17,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/static"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
-	"github.com/sns45/assayward/cmd/assayward/discover"
+	"github.com/sns45/assayward/internal/discover"
 )
 
 // attestationArtifactType is the cosign/sigstore artifact type used on referrer

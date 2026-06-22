@@ -16,7 +16,7 @@ import (
 	"github.com/sns45/assayward/pkg/core/engine"
 	"github.com/sns45/assayward/pkg/core/policy"
 
-	"github.com/sns45/assayward/cmd/assayward/discover"
+	"github.com/sns45/assayward/internal/discover"
 )
 
 // coreEvaluator implements Evaluator using the real engine.Evaluate and the
@@ -83,13 +83,14 @@ func (e *coreEvaluator) Evaluate(ctx context.Context, img core.ImageRef) (core.D
 		id = resolved
 	}
 
+	t := e.now()
 	ev := core.Evidence{
 		Image:        img,
 		Attestations: atts,
 		Identity:     id,
-		FetchedAt:    e.now(),
+		FetchedAt:    t,
 	}
 
-	dec := engine.Evaluate(ev, e.pol, e.roots, core.FixedClock{T: e.now()})
+	dec := engine.Evaluate(ev, e.pol, e.roots, core.FixedClock{T: t})
 	return dec, nil
 }

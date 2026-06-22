@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
+	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,10 +74,10 @@ func handleValidate(w http.ResponseWriter, r *http.Request, eval Evaluator, mode
 	resp := Review(r.Context(), &ar, eval, mode)
 
 	w.Header().Set("Content-Type", "application/json")
-	if encErr := json.NewEncoder(w).Encode(resp); encErr != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		// Encoding to the response writer failed. There is nothing useful we can
 		// do at this point — the partial write has already been sent. Log-only.
-		_ = encErr
+		log.Printf("assayward-webhook: encode response: %v", err)
 	}
 }
 
@@ -109,7 +111,9 @@ func writeFailClosed(w http.ResponseWriter, mode Mode, msg string) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		log.Printf("assayward-webhook: encode response: %v", err)
+	}
 }
 
 // ListenAndServeTLS starts the webhook HTTPS server using the Config's CertFile
@@ -129,7 +133,9 @@ func (c Config) ListenAndServeTLS(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		return srv.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return srv.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		return err
 	}

@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/sns45/assayward/cmd/assayward/discover"
+	"github.com/sns45/assayward/internal/discover"
 )
 
 // testdataRoot returns the absolute path to repo-root testdata/.
@@ -15,9 +15,9 @@ func testdataRoot() string {
 	if !ok {
 		panic("discover_test: runtime.Caller(0) failed")
 	}
-	// bundle_test.go is at cmd/assayward/discover/bundle_test.go
-	// repo root is ../../../
-	return filepath.Join(filepath.Dir(filename), "..", "..", "..", "testdata")
+	// bundle_test.go is at internal/discover/bundle_test.go
+	// repo root is ../../
+	return filepath.Join(filepath.Dir(filename), "..", "..", "testdata")
 }
 
 // TestFromBundles_ReadsNFilesAsNAttestations verifies that FromBundles returns
