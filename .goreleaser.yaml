@@ -1,0 +1,124 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: assayward
+    main: ./cmd/assayward
+    binary: assayward
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    ids:
+      - assayward
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  use: git
+  groups:
+    - title: "New Features"
+      regexp: "^feat"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "Other"
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - "^ci:"
+
+brews:
+  - name: assayward
+    ids:
+      - default
+    repository:
+      owner: sns45
+      name: homebrew-tap
+    homepage: "https://github.com/sns45/assayward"
+    description: "Evaluate supply-chain evidence against a declarative policy"
+    license: "Apache-2.0"
+    install: |
+      bin.install "assayward"
+    test: |
+      system "#{bin}/assayward", "--version"
+
+scoops:
+  - name: assayward
+    ids:
+      - default
+    repository:
+      owner: sns45
+      name: scoop-bucket
+    homepage: "https://github.com/sns45/assayward"
+    description: "Evaluate supply-chain evidence against a declarative policy"
+    license: "Apache-2.0"
+
+nfpms:
+  - id: assayward-packages
+    package_name: assayward
+    ids:
+      - assayward
+    vendor: sns45
+    maintainer: "sns45 <notifyshantanu@gmail.com>"
+    description: "Evaluate supply-chain evidence (SLSA provenance, SBOMs, VEX) against a declarative policy and produce allow/audit/deny decisions."
+    homepage: "https://github.com/sns45/assayward"
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    section: utils
+    priority: optional
+
+dockers:
+  # NOTE: Single-arch (linux/amd64) build for simplicity.
+  # Multi-arch (linux/arm64 via docker_manifests + buildx) is a future refinement.
+  - image_templates:
+      - "ghcr.io/sns45/assayward:{{ .Version }}"
+      - "ghcr.io/sns45/assayward:latest"
+    ids:
+      - assayward
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/sns45/assayward"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
