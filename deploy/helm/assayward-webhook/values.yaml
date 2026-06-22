@@ -70,14 +70,24 @@ trustRoots:
 # Webhook selector settings
 # ---------------------------------------------------------------------------
 webhook:
-  # namespaceSelector: exclude kube-system and the release namespace to avoid
-  # bootstrap deadlocks and self-deny scenarios.
-  namespaceSelector:
-    matchExpressions:
-      - key: kubernetes.io/metadata.name
-        operator: NotIn
-        values:
-          - kube-system
+  # namespaceSelector: the chart ALWAYS emits a mandatory matchExpression that
+  # excludes both `kube-system` and the release namespace (.Release.Namespace)
+  # via the kubernetes.io/metadata.name label (set automatically by Kubernetes
+  # on every namespace).  This prevents bootstrap deadlocks (the webhook must
+  # not validate its own pods before it is running) and avoids self-deny.
+  #
+  # Any matchExpressions or matchLabels provided here are MERGED with (appended
+  # after) that mandatory exclusion.  You cannot remove the self-exclusion via
+  # this field; it is always present.
+  #
+  # Example — also exclude a "legacy" namespace:
+  #   namespaceSelector:
+  #     matchExpressions:
+  #       - key: kubernetes.io/metadata.name
+  #         operator: NotIn
+  #         values:
+  #           - legacy-ns
+  namespaceSelector: {}
   objectSelector: {}
   timeoutSeconds: 10
 

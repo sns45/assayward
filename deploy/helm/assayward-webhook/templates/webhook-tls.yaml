@@ -95,10 +95,20 @@ webhooks:
         path: /validate
         port: {{ .Values.service.port }}
       caBundle: {{ $caCrtB64 }}
-    {{- with .Values.webhook.namespaceSelector }}
     namespaceSelector:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - {{ $ns }}
+        {{- with (.Values.webhook.namespaceSelector).matchExpressions }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with (.Values.webhook.namespaceSelector).matchLabels }}
+      matchLabels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     {{- with .Values.webhook.objectSelector }}
     objectSelector:
       {{- toYaml . | nindent 6 }}
@@ -152,10 +162,20 @@ webhooks:
         namespace: {{ $ns }}
         path: /validate
         port: {{ .Values.service.port }}
-    {{- with .Values.webhook.namespaceSelector }}
     namespaceSelector:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - {{ $ns }}
+        {{- with (.Values.webhook.namespaceSelector).matchExpressions }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with (.Values.webhook.namespaceSelector).matchLabels }}
+      matchLabels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     {{- with .Values.webhook.objectSelector }}
     objectSelector:
       {{- toYaml . | nindent 6 }}
