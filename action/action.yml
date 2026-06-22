@@ -40,6 +40,10 @@ inputs:
     description: "assayward release version to download (e.g. v0.1.0) or 'latest'."
     required: false
     default: "latest"
+  forgeseal-output:
+    description: "Path to a forgeseal output directory; assembles attestations from forgeseal's native SBOM/SLSA/VEX files"
+    required: false
+    default: ""
   binary-path:
     description: "Path to a pre-built assayward binary. When set, skips the download step. Useful for testing or bring-your-own-binary scenarios."
     required: false
@@ -68,6 +72,7 @@ runs:
         ASSAYWARD_SIGSTORE_TRUST_ROOT: ${{ inputs.sigstore-trust-root }}
         ASSAYWARD_SPIFFE_BUNDLE: ${{ inputs.spiffe-bundle }}
         ASSAYWARD_SVID: ${{ inputs.svid }}
+        ASSAYWARD_FORGESEAL_OUTPUT: ${{ inputs.forgeseal-output }}
         ASSAYWARD_VERSION: ${{ inputs.version }}
         ASSAYWARD_BINARY_PATH: ${{ inputs.binary-path }}
       run: bash "${{ github.action_path }}/entrypoint.sh"

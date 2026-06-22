@@ -121,6 +121,11 @@ if [[ -n "${ASSAYWARD_SIGSTORE_TRUST_ROOT:-}" ]]; then
   VERIFY_ARGS+=("--sigstore-trust-root" "${ASSAYWARD_SIGSTORE_TRUST_ROOT}")
 fi
 
+# --forgeseal-output
+if [[ -n "${ASSAYWARD_FORGESEAL_OUTPUT:-}" ]]; then
+  VERIFY_ARGS+=("--forgeseal-output" "${ASSAYWARD_FORGESEAL_OUTPUT}")
+fi
+
 # --spiffe-bundle (one flag per non-empty line; each line is td=path)
 if [[ -n "${ASSAYWARD_SPIFFE_BUNDLE:-}" ]]; then
   while IFS= read -r line; do

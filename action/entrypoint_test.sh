@@ -159,6 +159,31 @@ echo "=== Test 6: sigstore-trust-root arg present ==="
 assert_contains "sigstore-trust-root arg" '--sigstore-trust-root' "${OUTPUT_1}"
 
 # ---------------------------------------------------------------------------
+# Test 6b: --forgeseal-output arg present when ASSAYWARD_FORGESEAL_OUTPUT set
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 6b: forgeseal-output arg present when ASSAYWARD_FORGESEAL_OUTPUT set ==="
+OUTPUT_6B=""
+EXIT_6B=0
+OUTPUT_6B="$(env \
+  ASSAYWARD_BINARY_PATH="${ASSAYWARD_BIN}" \
+  ASSAYWARD_IMAGE="${TEST_IMAGE}" \
+  ASSAYWARD_FORGESEAL_OUTPUT="/some/dir" \
+  ASSAYWARD_POLICY="baseline" \
+  ASSAYWARD_POLICY_FILE="" \
+  ASSAYWARD_BUNDLE="" \
+  ASSAYWARD_FROM_OCI="false" \
+  ASSAYWARD_SIGSTORE_TRUST_ROOT="" \
+  ASSAYWARD_SPIFFE_BUNDLE="" \
+  ASSAYWARD_SVID="" \
+  ASSAYWARD_VERSION="latest" \
+  RUNNER_OS="Linux" \
+  RUNNER_ARCH="X64" \
+  bash "${SCRIPT_DIR}/entrypoint.sh" 2>&1)" || EXIT_6B=$?
+
+assert_contains "forgeseal-output flag in args" '--forgeseal-output /some/dir' "${OUTPUT_6B}"
+
+# ---------------------------------------------------------------------------
 # Test 7: --policy-file overrides --policy when set
 # ---------------------------------------------------------------------------
 echo ""
