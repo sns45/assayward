@@ -52,12 +52,19 @@ func VerifyVEX(env DecodedEnvelope) VEXResult {
 		}
 	}
 
-	// Build CVE-to-status map from each statement's vulnerability name.
+	// Build CVE-to-status map from each statement's vulnerability identifier.
+	// Prefer Vulnerability.Name (the canonical VulnerabilityID field); if empty,
+	// fall back to Vulnerability.ID (the "@id" IRI field). OpenVEX documents
+	// produced by tools such as forgeseal carry the CVE only in "@id" with Name
+	// left empty. Without the fallback, affected CVEs would be silently missed.
 	statuses := make(map[string]string, len(doc.Statements))
 	for _, s := range doc.Statements {
-		name := string(s.Vulnerability.Name)
-		if name != "" {
-			statuses[name] = string(s.Status)
+		id := string(s.Vulnerability.Name)
+		if id == "" {
+			id = s.Vulnerability.ID
+		}
+		if id != "" {
+			statuses[id] = string(s.Status)
 		}
 	}
 
