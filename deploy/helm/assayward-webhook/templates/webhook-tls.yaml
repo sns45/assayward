@@ -1,0 +1,164 @@
+{{/*
+webhook-tls.yaml — Single source of truth for TLS cert generation.
+
+For tls.mode=helm this file:
+  1. Looks up any existing Secret in the cluster; if found, reuses the stored
+     certs (upgrade stability — no cert rotation on `helm upgrade`).
+  2. If no existing Secret, generates the CA and serving cert ONCE using
+     genCA + genSignedCert.
+  3. Emits the TLS Secret AND the ValidatingWebhookConfiguration from the
+     SAME $ca / $cert variables, guaranteeing the caBundle always matches
+     the serving cert within a single render.
+
+For tls.mode=certManager this file emits:
+  - The cert-manager Certificate (which provisions the Secret).
+  - The ValidatingWebhookConfiguration with the cert-manager CA-injection
+    annotation; cert-manager injects caBundle automatically.
+*/}}
+
+{{- $svcName    := include "assayward-webhook.fullname"    . }}
+{{- $ns         := .Release.Namespace }}
+{{- $secretName := include "assayward-webhook.tlsSecretName" . }}
+{{- $svcDNS     := include "assayward-webhook.serviceDNS"     . }}
+{{- $svcCluster := include "assayward-webhook.serviceClusterDNS" . }}
+{{- $altNames   := list $svcDNS $svcCluster }}
+
+{{- if eq .Values.tls.mode "helm" }}
+
+{{- /* ------------------------------------------------------------------ */}}
+{{- /* Step 1: try to reuse certs from an existing Secret (upgrade safety) */}}
+{{- /* ------------------------------------------------------------------ */}}
+{{- $existing := lookup "v1" "Secret" $ns $secretName }}
+
+{{- /* Variables that will hold the final base64-encoded values for the Secret */}}
+{{- $tlsCrtB64 := "" }}
+{{- $tlsKeyB64 := "" }}
+{{- $caCrtB64  := "" }}
+
+{{- if $existing }}
+  {{- /* Reuse existing cert data — already base64-encoded in .data */}}
+  {{- $tlsCrtB64 = index $existing.data "tls.crt" }}
+  {{- $tlsKeyB64 = index $existing.data "tls.key" }}
+  {{- $caCrtB64  = index $existing.data "ca.crt"  }}
+{{- else }}
+  {{- /* Generate CA and serving cert exactly once for this render */}}
+  {{- $ca   := genCA   (printf "%s-ca" $svcName) 3650 }}
+  {{- $cert := genSignedCert $svcName nil $altNames 3650 $ca }}
+  {{- $tlsCrtB64 = $cert.Cert | b64enc }}
+  {{- $tlsKeyB64 = $cert.Key  | b64enc }}
+  {{- $caCrtB64  = $ca.Cert   | b64enc }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "assayward-webhook.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/note: >
+      Self-signed cert managed by Helm. Existing certs are reused on
+      helm upgrade (via lookup). Use tls.mode=certManager for
+      cert-manager-managed rotation.
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrtB64 }}
+  tls.key: {{ $tlsKeyB64 }}
+  ca.crt:  {{ $caCrtB64 }}
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $svcName }}
+  labels:
+    {{- include "assayward-webhook.labels" . | nindent 4 }}
+webhooks:
+  - name: pods.assayward.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    clientConfig:
+      service:
+        name: {{ $svcName }}
+        namespace: {{ $ns }}
+        path: /validate
+        port: {{ .Values.service.port }}
+      caBundle: {{ $caCrtB64 }}
+    {{- with .Values.webhook.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.webhook.objectSelector }}
+    objectSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+
+{{- else if eq .Values.tls.mode "certManager" }}
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "assayward-webhook.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $secretName }}
+  duration: {{ .Values.tls.duration }}
+  renewBefore: 720h
+  dnsNames:
+    - {{ $svcDNS }}
+    - {{ $svcCluster }}
+  issuerRef:
+    {{- toYaml .Values.tls.certManager.issuerRef | nindent 4 }}
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $svcName }}
+  labels:
+    {{- include "assayward-webhook.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ $ns }}/{{ $secretName }}
+webhooks:
+  - name: pods.assayward.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    clientConfig:
+      service:
+        name: {{ $svcName }}
+        namespace: {{ $ns }}
+        path: /validate
+        port: {{ .Values.service.port }}
+    {{- with .Values.webhook.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.webhook.objectSelector }}
+    objectSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+
+{{- end }}
