@@ -169,3 +169,38 @@ func TestVerifyNoAttestationSourceExits2(t *testing.T) {
 		t.Errorf("no attestation source: expected empty stdout on error path, got: %s", stdout)
 	}
 }
+
+// TestVerifyForgesealDogfoodAllow exercises the --forgeseal-output CLI flag end-to-end
+// using the real forgeseal and svidmint dogfood fixtures. This is the CLI surface of
+// the §10 self-demonstrating loop and must exit 0 (allow).
+func TestVerifyForgesealDogfoodAllow(t *testing.T) {
+	root := testdataRoot()
+	dogfood := filepath.Join(root, "dogfood")
+
+	args := []string{
+		"verify",
+		"--forgeseal-output", filepath.Join(dogfood, "forgeseal"),
+		"--image", "forgeseal-artifact@sha256:0c941bd483905285ae28f331495987a058da45f6d2883b1e7dc90387c5427665",
+		"--svid", filepath.Join(dogfood, "svidmint", "publisher-jwt-svid.jwt"),
+		"--svid-type", "jwt",
+		"--spiffe-bundle", "ci.svidmint.dev=" + filepath.Join(dogfood, "svidmint", "trust-bundle-jwks.json"),
+		"--policy-file", filepath.Join(dogfood, "policy-dogfood.yaml"),
+		"--output", "json",
+	}
+
+	code, stdout := runVerify(t, args)
+
+	// Print the output for diagnostics.
+	t.Logf("CLI dogfood stdout:\n%s", stdout)
+
+	if code != ExitAllow {
+		t.Errorf("dogfood CLI: exit code = %d, want %d (allow)", code, ExitAllow)
+	}
+	if !strings.Contains(stdout, `"allow"`) {
+		t.Errorf("dogfood CLI: stdout does not contain \"allow\":\n%s", stdout)
+	}
+	var dec map[string]any
+	if err := json.Unmarshal([]byte(stdout), &dec); err != nil {
+		t.Errorf("dogfood CLI: stdout is not valid JSON: %v\n%s", err, stdout)
+	}
+}

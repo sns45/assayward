@@ -1,0 +1,27 @@
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: forgeseal-dogfood
+  version: v0.1.0
+spec:
+  mode: enforce
+  signature:
+    # forgeseal Sigstore signing is STUBBED: the slsa.sigstore-bundle.json has
+    # no Fulcio certificate chain and no Rekor entry (verificationMaterial is
+    # absent). Cryptographic signature verification is therefore deferred.
+    # Trust is established via SLSA provenance (builder ID + subject digest),
+    # SBOM presence, VEX not_affected status, and the svidmint publisher JWT-SVID.
+    # Full Sigstore-keyless + forgeseal-verified signing is a tracked M6 gap.
+    required: false
+  slsa:
+    minLevel: 3
+    allowedBuilders:
+      - "https://forgeseal.dev/*"
+  vex:
+    maxUnmitigatedSeverity: high
+  sbom:
+    required: true
+  identity:
+    required: true
+    trustDomain: "spiffe://ci.svidmint.dev"
+    idPattern: "spiffe://ci.svidmint.dev/github-actions/*"

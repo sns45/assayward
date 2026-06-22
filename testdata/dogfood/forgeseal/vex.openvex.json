@@ -1,0 +1,22 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://forgeseal.dev/vex/release",
+  "author": "forgeseal",
+  "timestamp": "2026-06-22T20:27:48Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "CVE-2024-0001"
+      },
+      "products": [
+        {
+          "@id": "pkg:golang/github.com/go-chi/chi/v5@v5.2.5"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "timestamp": "2026-06-22T20:27:48Z"
+    }
+  ]
+}

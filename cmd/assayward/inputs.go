@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sns45/assayward/internal/discover"
+	"github.com/sns45/assayward/internal/forgeseal"
 	core "github.com/sns45/assayward/pkg/core"
 	"github.com/sns45/assayward/pkg/core/policy"
 )
@@ -15,15 +16,16 @@ import (
 // evalInputs holds the raw flag values shared between the verify and explain
 // subcommands. It is populated by registerEvalFlags and consumed by build().
 type evalInputs struct {
-	Bundles       []string
-	FromOCI       string // --from-oci: image ref for OCI referrers discovery (explicit opt-in, v0.1)
-	Policy        string
-	PolicyFile    string
-	Image         string
-	SigstoreRoot  string
-	SPIFFEBundles []string
-	SVID          string
-	SVIDType      string
+	Bundles         []string
+	FromOCI         string // --from-oci: image ref for OCI referrers discovery (explicit opt-in, v0.1)
+	ForgesealOutput string // --forgeseal-output: read forgeseal native output dir instead of --bundle
+	Policy          string
+	PolicyFile      string
+	Image           string
+	SigstoreRoot    string
+	SPIFFEBundles   []string
+	SVID            string
+	SVIDType        string
 }
 
 // registerEvalFlags binds the shared flag set onto cmd and wires the flags into
@@ -34,6 +36,9 @@ func registerEvalFlags(cmd *cobra.Command, o *evalInputs) {
 	// Auto-discovery from a plain image tag without an explicit --from-oci is a
 	// future refinement; callers must supply the digest-pinned ref themselves.
 	cmd.Flags().StringVar(&o.FromOCI, "from-oci", "", "image ref (name@sha256:<hex>) to discover attestations via OCI referrers API")
+	// --forgeseal-output reads forgeseal's native output directory and assembles
+	// attestations automatically. Mutually exclusive with --bundle/--from-oci.
+	cmd.Flags().StringVar(&o.ForgesealOutput, "forgeseal-output", "", "path to forgeseal output directory (assembles SLSA/SBOM/VEX automatically)")
 	cmd.Flags().StringVar(&o.Policy, "policy", "", "built-in policy name: baseline|slsa-l3|serverless-edge")
 	cmd.Flags().StringVar(&o.PolicyFile, "policy-file", "", "path to a TrustPolicy YAML file")
 	cmd.Flags().StringVar(&o.Image, "image", "", "image ref as name@sha256:<hex> (required)")
@@ -117,40 +122,67 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 	// 3. Assemble Evidence
 	// ----------------------------------------------------------
 
+	// --forgeseal-output is mutually exclusive with --bundle/--from-oci.
+	// When set, assemble Evidence via the forgeseal adapter instead of the
+	// general-purpose bundle discovery path.
+	if o.ForgesealOutput != "" && (len(o.Bundles) > 0 || o.FromOCI != "") {
+		return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+			Code: ExitError,
+			Msg:  fmt.Sprintf("%s: --forgeseal-output is mutually exclusive with --bundle and --from-oci", cmdName),
+		}
+	}
+
 	// Require at least one attestation source so that a mis-configured invocation
 	// fails fast with exit 2 rather than silently producing a "deny" decision with
 	// no evidence. Auto-discovery (inferring --from-oci from --image) is a future
-	// refinement; v0.1 requires an explicit --bundle or --from-oci.
-	if len(o.Bundles) == 0 && o.FromOCI == "" {
+	// refinement; v0.1 requires an explicit --bundle, --from-oci, or --forgeseal-output.
+	if len(o.Bundles) == 0 && o.FromOCI == "" && o.ForgesealOutput == "" {
 		return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
 			Code: ExitError,
-			Msg:  fmt.Sprintf("%s: at least one attestation source is required: supply --bundle and/or --from-oci", cmdName),
+			Msg:  fmt.Sprintf("%s: at least one attestation source is required: supply --bundle, --from-oci, or --forgeseal-output", cmdName),
 		}
 	}
 
-	atts, err := discover.FromBundles(o.Bundles)
-	if err != nil {
-		return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
-			Code: ExitError,
-			Msg:  fmt.Sprintf("%s: %v", cmdName, err),
-		}
-	}
+	var ev core.Evidence
 
-	if o.FromOCI != "" {
-		ociAtts, err := discover.FromOCI(o.FromOCI)
+	if o.ForgesealOutput != "" {
+		// Assemble attestations from forgeseal's native output directory.
+		fsEv, err := forgeseal.EvidenceFromOutput(o.ForgesealOutput, imageRef.Digest)
 		if err != nil {
 			return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
 				Code: ExitError,
-				Msg:  fmt.Sprintf("%s: --from-oci: %v", cmdName, err),
+				Msg:  fmt.Sprintf("%s: --forgeseal-output: %v", cmdName, err),
 			}
 		}
-		atts = append(atts, ociAtts...)
-	}
+		// Override image name from --image flag (adapter sets a placeholder name).
+		fsEv.Image.Name = imageRef.Name
+		fsEv.FetchedAt = systemClock{}.Now()
+		ev = fsEv
+	} else {
+		atts, err := discover.FromBundles(o.Bundles)
+		if err != nil {
+			return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+				Code: ExitError,
+				Msg:  fmt.Sprintf("%s: %v", cmdName, err),
+			}
+		}
 
-	ev := core.Evidence{
-		Image:        imageRef,
-		Attestations: atts,
-		FetchedAt:    systemClock{}.Now(),
+		if o.FromOCI != "" {
+			ociAtts, err := discover.FromOCI(o.FromOCI)
+			if err != nil {
+				return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+					Code: ExitError,
+					Msg:  fmt.Sprintf("%s: --from-oci: %v", cmdName, err),
+				}
+			}
+			atts = append(atts, ociAtts...)
+		}
+
+		ev = core.Evidence{
+			Image:        imageRef,
+			Attestations: atts,
+			FetchedAt:    systemClock{}.Now(),
+		}
 	}
 
 	if o.SVID != "" {
