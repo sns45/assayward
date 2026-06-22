@@ -1,0 +1,384 @@
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/sns45/assayward/internal/bundle"
+	"github.com/sns45/assayward/pkg/core/policy/builtin"
+)
+
+// registerBundleCmd creates the "bundle" parent command and registers
+// push/pull/sign/verify subcommands. stdout is where non-error output is
+// written; nil falls back to os.Stdout. transport is the http.RoundTripper
+// to inject (nil uses the oras default; tests inject an httptest transport).
+func registerBundleCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+
+	bundleCmd := &cobra.Command{
+		Use:          "bundle",
+		Short:        "OCI policy bundle push, pull, sign, and verify",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+
+	registerBundlePushCmd(bundleCmd, stdout, transport)
+	registerBundlePullCmd(bundleCmd, stdout, transport)
+	registerBundleSignCmd(bundleCmd, stdout, transport)
+	registerBundleVerifyCmd(bundleCmd, stdout, transport)
+
+	parent.AddCommand(bundleCmd)
+}
+
+// registerBundlePushCmd registers "bundle push <ref> --policy <file>... [--from-builtins]".
+func registerBundlePushCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
+	var (
+		policyFiles  []string
+		fromBuiltins bool
+		bundleName   string
+		bundleVer    string
+		plainHTTP    bool
+	)
+
+	cmd := &cobra.Command{
+		Use:          "push <ref>",
+		Short:        "Pack policy files as an OCI artifact and push to <ref>",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := args[0]
+			ctx := context.Background()
+
+			policies := make(map[string][]byte)
+
+			if fromBuiltins {
+				for name, raw := range builtin.All() {
+					policies[name] = raw
+				}
+			}
+
+			for _, f := range policyFiles {
+				raw, err := os.ReadFile(f)
+				if err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle push: read policy file %q: %v", f, err)}
+				}
+				// Use the filename without extension as the policy name.
+				name := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
+				policies[name] = raw
+			}
+
+			if len(policies) == 0 {
+				return &CLIError{Code: ExitError, Msg: "bundle push: no policies specified: use --policy <file> or --from-builtins"}
+			}
+
+			if bundleName == "" {
+				bundleName = tagFromRef(ref)
+			}
+
+			meta := bundle.Meta{BundleName: bundleName, Version: bundleVer}
+
+			store, manifestDesc, err := bundle.Pack(ctx, policies, meta)
+			if err != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle push: pack: %v", err)}
+			}
+
+			digest, err := bundle.Push(ctx, store, manifestDesc, ref, bundle.PushOptions{
+				PlainHTTP: plainHTTP,
+				Transport: transport,
+			})
+			if err != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle push: %v", err)}
+			}
+
+			fmt.Fprintf(stdout, "pushed %s\ndigest: %s\n", ref, digest)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringArrayVar(&policyFiles, "policy", nil, "policy YAML file to include (repeatable)")
+	cmd.Flags().BoolVar(&fromBuiltins, "from-builtins", false, "include all 3 built-in policies")
+	cmd.Flags().StringVar(&bundleName, "bundle-name", "", "bundle name (default: tag portion of ref)")
+	cmd.Flags().StringVar(&bundleVer, "bundle-version", "v0.1.0", "bundle version")
+	cmd.Flags().BoolVar(&plainHTTP, "plain-http", false, "use HTTP instead of HTTPS")
+
+	parent.AddCommand(cmd)
+}
+
+// registerBundlePullCmd registers "bundle pull <ref> [--out <dir>]".
+func registerBundlePullCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
+	var (
+		outDir    string
+		plainHTTP bool
+	)
+
+	cmd := &cobra.Command{
+		Use:          "pull <ref>",
+		Short:        "Pull and validate a policy bundle from <ref>",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := args[0]
+			ctx := context.Background()
+
+			policies, meta, err := bundle.Pull(ctx, ref, bundle.PullOptions{
+				PlainHTTP: plainHTTP,
+				Transport: transport,
+			})
+			if err != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle pull: %v", err)}
+			}
+
+			if outDir != "" {
+				if err := os.MkdirAll(outDir, 0755); err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle pull: mkdir %q: %v", outDir, err)}
+				}
+				for name, raw := range policies {
+					path := filepath.Join(outDir, name+".yaml")
+					if err := os.WriteFile(path, raw, 0644); err != nil {
+						return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle pull: write %q: %v", path, err)}
+					}
+					fmt.Fprintf(stdout, "wrote %s\n", path)
+				}
+			} else {
+				fmt.Fprintf(stdout, "bundle: %s@%s\n", meta.BundleName, meta.Version)
+				for _, name := range meta.PolicyFiles {
+					fmt.Fprintf(stdout, "  %s\n", name)
+				}
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outDir, "out", "", "directory to write pulled policy files")
+	cmd.Flags().BoolVar(&plainHTTP, "plain-http", false, "use HTTP instead of HTTPS")
+
+	parent.AddCommand(cmd)
+}
+
+// registerBundleSignCmd registers "bundle sign <ref> --key <ecdsa-key-file>".
+//
+// Production signing note:
+// In production (M6), replace --key with --sigstore (keyless Sigstore via
+// cosign Fulcio + Rekor), verified by forgeseal (the trilogy loop, §6.6).
+// The referrer/subject OCI wiring here is identical to the cosign pattern,
+// so the swap is mechanical.
+//
+// TODO(M6): add --sigstore flag for keyless cosign signing + forgeseal verify.
+func registerBundleSignCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
+	var (
+		keyFile   string
+		plainHTTP bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "sign <ref>",
+		Short: "Sign a policy bundle at <ref> and push the signature as a referrer",
+		Long: `sign computes an ECDSA signature of the bundle manifest digest and pushes
+it as an OCI referrer artifact (subject = the bundle manifest).
+
+v0.1 uses a keyed ECDSA proxy (offline, hermetic). Production (M6) will use
+cosign keyless signing (Fulcio + Rekor) verified by forgeseal.
+
+TODO(M6): add --sigstore flag for Sigstore keyless signing + forgeseal verify.`,
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := args[0]
+			ctx := context.Background()
+
+			priv, err := loadECPrivateKey(keyFile)
+			if err != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: load key %q: %v", keyFile, err)}
+			}
+
+			// Resolve the manifest digest for the ref by pulling metadata.
+			policies, _, pullErr := bundle.Pull(ctx, ref, bundle.PullOptions{
+				PlainHTTP: plainHTTP,
+				Transport: transport,
+			})
+			if pullErr != nil || len(policies) == 0 {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: resolve manifest at %q: %v", ref, pullErr)}
+			}
+
+			// Repack to get the same deterministic digest.
+			store, manifestDesc, packErr := bundle.Pack(ctx, policies, bundle.Meta{})
+			if packErr != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: repack: %v", packErr)}
+			}
+			_ = store
+
+			manifestDigest := manifestDesc.Digest.String()
+
+			if err := bundle.SignAndPushReferrer(ctx, manifestDigest, ref, priv, bundle.PushOptions{
+				PlainHTTP: plainHTTP,
+				Transport: transport,
+			}); err != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: %v", err)}
+			}
+
+			fmt.Fprintf(stdout, "signed %s\ndigest: %s\n", ref, manifestDigest)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&keyFile, "key", "", "path to ECDSA private key PEM file (required)")
+	_ = cmd.MarkFlagRequired("key")
+	cmd.Flags().BoolVar(&plainHTTP, "plain-http", false, "use HTTP instead of HTTPS")
+
+	parent.AddCommand(cmd)
+}
+
+// registerBundleVerifyCmd registers "bundle verify <ref> --key <pubkey-file>".
+//
+// Exit codes: 0 valid, 1 invalid/missing, 2 usage error.
+//
+// Production: --sigstore flag (keyless, verified by forgeseal).
+// TODO(M6): wire --sigstore flag for forgeseal verification.
+func registerBundleVerifyCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
+	var (
+		pubKeyFile string
+		plainHTTP  bool
+		// TODO(M6): add --sigstore bool flag for Sigstore keyless + forgeseal.
+	)
+
+	cmd := &cobra.Command{
+		Use:   "verify <ref>",
+		Short: "Verify a policy bundle signature at <ref>",
+		Long: `verify pulls the signature referrer for the bundle at <ref> and checks
+it against the provided public key.
+
+Exit codes: 0 = valid, 1 = invalid or no signature, 2 = usage/input error.
+
+v0.1 uses ECDSA keyed verification (offline proxy). Production (M6) uses
+cosign keyless (Sigstore) verified by forgeseal (§6.6 trilogy loop).
+
+TODO(M6): add --sigstore flag for forgeseal keyless verification.`,
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := args[0]
+			ctx := context.Background()
+
+			pub, err := loadECPublicKey(pubKeyFile)
+			if err != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: load key %q: %v", pubKeyFile, err)}
+			}
+
+			// Resolve manifest digest by repacking from pulled policies.
+			policies, _, pullErr := bundle.Pull(ctx, ref, bundle.PullOptions{
+				PlainHTTP: plainHTTP,
+				Transport: transport,
+			})
+			if pullErr != nil || len(policies) == 0 {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: resolve manifest at %q: %v", ref, pullErr)}
+			}
+
+			store, manifestDesc, packErr := bundle.Pack(ctx, policies, bundle.Meta{})
+			if packErr != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: repack: %v", packErr)}
+			}
+			_ = store
+
+			manifestDigest := manifestDesc.Digest.String()
+
+			if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, pub, bundle.PullOptions{
+				PlainHTTP: plainHTTP,
+				Transport: transport,
+			}); err != nil {
+				fmt.Fprintf(stdout, "INVALID: %v\n", err)
+				return &CLIError{Code: ExitDeny, Msg: fmt.Sprintf("bundle verify: %v", err)}
+			}
+
+			fmt.Fprintf(stdout, "OK: signature valid\n")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pubKeyFile, "key", "", "path to ECDSA public key PEM file (required)")
+	_ = cmd.MarkFlagRequired("key")
+	cmd.Flags().BoolVar(&plainHTTP, "plain-http", false, "use HTTP instead of HTTPS")
+
+	parent.AddCommand(cmd)
+}
+
+// ---------------------------------------------------------------------------
+// Key file helpers (shared between sign and verify CLI tests)
+// ---------------------------------------------------------------------------
+
+// loadECPrivateKey reads an ECDSA private key from a PEM file.
+func loadECPrivateKey(path string) (*ecdsa.PrivateKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found in %q", path)
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse EC private key: %w", err)
+	}
+	return key, nil
+}
+
+// loadECPublicKey reads an ECDSA public key from a PEM file (PKIX DER encoding).
+func loadECPublicKey(path string) (*ecdsa.PublicKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found in %q", path)
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse PKIX public key: %w", err)
+	}
+	ec, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("expected *ecdsa.PublicKey, got %T", pub)
+	}
+	return ec, nil
+}
+
+// tagFromRef is re-exported for the CLI package. Delegates to the bundle
+// package helper via the same logic (avoids a cyclic dependency on bundle's
+// unexported helper).
+func tagFromRef(ref string) string {
+	for i := len(ref) - 1; i >= 0; i-- {
+		if ref[i] == ':' {
+			hasSlash := false
+			for j := 0; j < i; j++ {
+				if ref[j] == '/' {
+					hasSlash = true
+					break
+				}
+			}
+			if hasSlash {
+				return ref[i+1:]
+			}
+		}
+	}
+	return "latest"
+}
+
+// init registers the bundle command on the package-level rootCmd.
+func init() {
+	registerBundleCmd(rootCmd, nil, nil)
+}
