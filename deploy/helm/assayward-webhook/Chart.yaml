@@ -1,0 +1,21 @@
+apiVersion: v2
+name: assayward-webhook
+description: >
+  Kubernetes validating admission webhook for assayward container image trust.
+  Runs in audit mode by default (§3 audit-first rollout); operators flip to
+  enforce only after observing Kubernetes Warning events.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - admission
+  - webhook
+  - supply-chain
+  - sigstore
+  - slsa
+home: https://github.com/sns45/assayward
+sources:
+  - https://github.com/sns45/assayward
+maintainers:
+  - name: assayward maintainers
+    url: https://github.com/sns45/assayward

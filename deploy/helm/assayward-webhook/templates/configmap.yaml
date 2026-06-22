@@ -1,0 +1,29 @@
+{{/*
+ConfigMap holds optional per-install configuration data:
+  - policy.yaml: the inline TrustPolicy (only when .Values.policy.inline is set).
+  - sigstore-trust-root.json: Sigstore TUF trusted-root JSON (only when set).
+  - spiffe-<trustDomain>: SPIFFE bundle PEM/JWKS per trust domain (only when set).
+
+When policy.inline is empty the chart passes --policy <builtin> instead of
+mounting this file, so the ConfigMap may be sparse.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "assayward-webhook.configmapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "assayward-webhook.labels" . | nindent 4 }}
+data:
+  {{- if .Values.policy.inline }}
+  policy.yaml: |
+    {{- .Values.policy.inline | nindent 4 }}
+  {{- end }}
+  {{- if .Values.trustRoots.sigstoreTUF }}
+  sigstore-trust-root.json: |
+    {{- .Values.trustRoots.sigstoreTUF | nindent 4 }}
+  {{- end }}
+  {{- range $domain, $bundle := .Values.trustRoots.spiffeBundles }}
+  {{ printf "spiffe-%s" $domain }}: |
+    {{- $bundle | nindent 4 }}
+  {{- end }}

@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "assayward-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "assayward-webhook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "assayward-webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "assayward-webhook.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "assayward-webhook.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        # TLS certificate and key from the Secret.
+        - name: tls
+          secret:
+            secretName: {{ include "assayward-webhook.tlsSecretName" . }}
+        # Policy and trust-roots ConfigMap (always mounted; may be sparse).
+        - name: config
+          configMap:
+            name: {{ include "assayward-webhook.configmapName" . }}
+            {{- if or .Values.policy.inline .Values.trustRoots.sigstoreTUF .Values.trustRoots.spiffeBundles }}
+            items:
+              {{- if .Values.policy.inline }}
+              - key: policy.yaml
+                path: policy.yaml
+              {{- end }}
+              {{- if .Values.trustRoots.sigstoreTUF }}
+              - key: sigstore-trust-root.json
+                path: sigstore-trust-root.json
+              {{- end }}
+              {{- range $domain, $_ := .Values.trustRoots.spiffeBundles }}
+              - key: {{ printf "spiffe-%s" $domain }}
+                path: {{ printf "spiffe-%s" $domain }}
+              {{- end }}
+            {{- end }}
+        # Temporary directory for any runtime scratch (readOnlyRootFilesystem requires this).
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: webhook
+          image: "{{ .Values.image.repository }}:{{ include "assayward-webhook.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - --addr=:8443
+            - --mode={{ .Values.mode }}
+            - --tls-cert=/tls/tls.crt
+            - --tls-key=/tls/tls.key
+            {{- if .Values.policy.inline }}
+            - --policy-file=/config/policy.yaml
+            {{- else }}
+            - --policy={{ .Values.policy.builtin }}
+            {{- end }}
+            {{- if .Values.trustRoots.sigstoreTUF }}
+            - --sigstore-trust-root=/config/sigstore-trust-root.json
+            {{- end }}
+            {{- range $domain, $_ := .Values.trustRoots.spiffeBundles }}
+            - {{ printf "--spiffe-bundle=%s=/config/spiffe-%s" $domain $domain }}
+            {{- end }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          # Liveness probe: GET /healthz on the TLS port (scheme HTTPS).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          # Readiness probe: same endpoint; pod is ready when TLS is up.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
