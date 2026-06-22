@@ -1,0 +1,73 @@
+name: "Assayward Supply-Chain Verify"
+description: "Verify container image supply-chain evidence against a trust policy using assayward."
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  image:
+    description: "Container image reference in name@sha256:<hex> format (required)."
+    required: true
+  policy:
+    description: "Built-in policy name: baseline | slsa-l3 | serverless-edge. Used when policy-file is not set."
+    required: false
+    default: "slsa-l3"
+  policy-file:
+    description: "Path to a TrustPolicy YAML file. When set, overrides the policy input."
+    required: false
+    default: ""
+  bundle:
+    description: "Attestation bundle file paths, one per line (multiline). Each non-empty line becomes a --bundle argument."
+    required: false
+    default: ""
+  from-oci:
+    description: "Set to 'true' to discover attestations via the OCI referrers API for the given image."
+    required: false
+    default: "false"
+  sigstore-trust-root:
+    description: "Path to a Sigstore trusted-root JSON file."
+    required: false
+    default: ""
+  spiffe-bundle:
+    description: "SPIFFE trust-domain bundle entries, one per line, in trustDomain=path format."
+    required: false
+    default: ""
+  svid:
+    description: "Path to a SVID credential (JWT token or PEM X.509)."
+    required: false
+    default: ""
+  version:
+    description: "assayward release version to download (e.g. v0.1.0) or 'latest'."
+    required: false
+    default: "latest"
+  binary-path:
+    description: "Path to a pre-built assayward binary. When set, skips the download step. Useful for testing or bring-your-own-binary scenarios."
+    required: false
+    default: ""
+
+outputs:
+  result:
+    description: "The verification result: allow, deny, or audit."
+    value: ${{ steps.verify.outputs.result }}
+  decision:
+    description: "The full decision JSON emitted by assayward verify."
+    value: ${{ steps.verify.outputs.decision }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run assayward verify
+      id: verify
+      shell: bash
+      env:
+        ASSAYWARD_IMAGE: ${{ inputs.image }}
+        ASSAYWARD_POLICY: ${{ inputs.policy }}
+        ASSAYWARD_POLICY_FILE: ${{ inputs.policy-file }}
+        ASSAYWARD_BUNDLE: ${{ inputs.bundle }}
+        ASSAYWARD_FROM_OCI: ${{ inputs.from-oci }}
+        ASSAYWARD_SIGSTORE_TRUST_ROOT: ${{ inputs.sigstore-trust-root }}
+        ASSAYWARD_SPIFFE_BUNDLE: ${{ inputs.spiffe-bundle }}
+        ASSAYWARD_SVID: ${{ inputs.svid }}
+        ASSAYWARD_VERSION: ${{ inputs.version }}
+        ASSAYWARD_BINARY_PATH: ${{ inputs.binary-path }}
+      run: bash "${{ github.action_path }}/entrypoint.sh"

@@ -1,0 +1,51 @@
+name: Supply Chain Gate (example)
+
+# Example consumer workflow showing assayward-action gating a build.
+# This workflow can be triggered manually to verify a named image.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Container image reference (name@sha256:<digest>)"
+        required: true
+        default: "ghcr.io/sns45/example:1.0.0@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      policy:
+        description: "Policy to verify against"
+        required: false
+        default: "slsa-l3"
+
+jobs:
+  supply-chain-gate:
+    name: Verify supply-chain evidence
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify supply-chain evidence
+        id: assayward
+        uses: sns45/assayward-action@v0.1
+        with:
+          image: ${{ github.event.inputs.image }}
+          policy: ${{ github.event.inputs.policy }}
+          bundle: |
+            attestations/provenance.bundle.json
+            attestations/sbom.bundle.json
+          sigstore-trust-root: "trust/sigstore-root.json"
+
+      - name: Show verification result
+        if: always()
+        run: |
+          echo "Result: ${{ steps.assayward.outputs.result }}"
+
+  deploy:
+    name: Deploy (runs only if gate passes)
+    needs: supply-chain-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy
+        run: echo "Image passed supply-chain gate; proceeding with deployment."
