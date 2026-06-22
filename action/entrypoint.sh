@@ -142,10 +142,7 @@ echo "assayward: running verify with args: ${VERIFY_ARGS[*]}"
 DECISION_JSON=""
 VERIFY_EXIT=0
 
-DECISION_JSON="$("${ASSAYWARD_BIN}" verify "${VERIFY_ARGS[@]}" 2>&1 >&1)" || VERIFY_EXIT=$?
-# Re-run capturing only stdout (decision JSON) while letting stderr flow through.
-DECISION_JSON=""
-VERIFY_EXIT=0
+# Single invocation: capture stdout (the decision JSON); stderr flows through to the action log.
 DECISION_JSON="$("${ASSAYWARD_BIN}" verify "${VERIFY_ARGS[@]}")" || VERIFY_EXIT=$?
 
 # ---------------------------------------------------------------------------
