@@ -1,6 +1,6 @@
 //go:build ignore
 
-// Generator for synthetic DSSE fixture files used in assayward tests.
+// Generator for synthetic DSSE and SVID fixture files used in assayward tests.
 //
 // SYNTHETIC PLACEHOLDERS: All generated fixtures are representative data for
 // development and CI testing. They will be replaced with real forgeseal/svidmint
@@ -14,12 +14,24 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
+	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	josejwt "github.com/go-jose/go-jose/v4/jwt"
 )
 
 // Constants matching internal/testfix/testfix.go.
@@ -296,5 +308,164 @@ func main() {
 		},
 	})
 
+	// 6-11. SVID fixtures (task 1.7).
+	writeSVIDFixtures(root)
+
 	fmt.Println("done — all fixtures written to testdata/")
+}
+
+// writeSVIDFixtures generates all SVID-related fixtures into testdata/svid/.
+//
+// SYNTHETIC PLACEHOLDERS: all keys and certs here are freshly generated at
+// generation time and are NOT real svidmint credentials. They will be replaced
+// before v0.1 ships.
+func writeSVIDFixtures(root string) {
+	svidDir := filepath.Join(root, "svid")
+	if err := os.MkdirAll(svidDir, 0o755); err != nil {
+		log.Fatalf("mkdir svid: %v", err)
+	}
+
+	// Generate the primary JWT signing key (ECDSA P-256).
+	jwtKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate JWT key: %v", err)
+	}
+
+	// --- JWT-SVID fixtures ---
+
+	// jwt-bundle.json: JWKS containing the public key for trust domain sns45.dev.
+	bundleBytes := mustMarshalJWKS(jwtKey)
+	writeFile(filepath.Join(svidDir, "jwt-bundle.json"), bundleBytes)
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-bundle.json"))
+
+	// jwt-valid.jwt: valid JWT-SVID, sub = spiffe://sns45.dev/ci/release,
+	// aud = [testImageDigest], exp far future.
+	validToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(87600*time.Hour))
+	writeFile(filepath.Join(svidDir, "jwt-valid.jwt"), []byte(validToken))
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-valid.jwt"))
+
+	// jwt-expired.jwt: same as valid but exp in the past.
+	expiredToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(-1*time.Hour))
+	writeFile(filepath.Join(svidDir, "jwt-expired.jwt"), []byte(expiredToken))
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-expired.jwt"))
+
+	// jwt-wrong-domain.jwt: sub = spiffe://evil.example/ci/release, signed by
+	// a DIFFERENT key (so it also fails bundle validation), aud = [testImageDigest].
+	wrongKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate wrong-domain JWT key: %v", err)
+	}
+	wrongDomainToken := mustSignJWT(wrongKey, "spiffe://evil.example/ci/release", testImageDigest, time.Now().Add(87600*time.Hour))
+	writeFile(filepath.Join(svidDir, "jwt-wrong-domain.jwt"), []byte(wrongDomainToken))
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-wrong-domain.jwt"))
+
+	// --- X509-SVID fixtures ---
+
+	// Generate a self-signed CA key and cert.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate CA key: %v", err)
+	}
+
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "sns45.dev SVID Test CA"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(87600 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caCertDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		log.Fatalf("create CA cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caCertDER)
+	if err != nil {
+		log.Fatalf("parse CA cert: %v", err)
+	}
+
+	// x509-bundle.pem: PEM of the X509-SVID CA root.
+	caBundlePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER})
+	writeFile(filepath.Join(svidDir, "x509-bundle.pem"), caBundlePEM)
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-bundle.pem"))
+
+	// Generate a leaf key and cert signed by the CA.
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate leaf key: %v", err)
+	}
+
+	spiffeURI, err := url.Parse("spiffe://sns45.dev/ci/release")
+	if err != nil {
+		log.Fatalf("parse SPIFFE URI: %v", err)
+	}
+
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "sns45.dev/ci/release"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(87600 * time.Hour),
+		URIs:         []*url.URL{spiffeURI},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	leafCertDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		log.Fatalf("create leaf cert: %v", err)
+	}
+
+	// x509-valid.pem: PEM leaf cert chain with URI SAN spiffe://sns45.dev/ci/release.
+	var leafChainPEM []byte
+	leafChainPEM = append(leafChainPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafCertDER})...)
+	writeFile(filepath.Join(svidDir, "x509-valid.pem"), leafChainPEM)
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-valid.pem"))
+}
+
+// mustMarshalJWKS marshals the public key of key into a JWKS document suitable
+// for use as a SPIFFE JWT bundle.
+func mustMarshalJWKS(key *ecdsa.PrivateKey) []byte {
+	jwk := jose.JSONWebKey{
+		Key:       &key.PublicKey,
+		KeyID:     "svid-test-key-1",
+		Algorithm: string(jose.ES256),
+		Use:       "sig",
+	}
+	jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}}
+	b, err := json.Marshal(jwks)
+	if err != nil {
+		log.Fatalf("marshal JWKS: %v", err)
+	}
+	return b
+}
+
+// mustSignJWT creates and signs a compact JWT-SVID token.
+func mustSignJWT(key *ecdsa.PrivateKey, sub, aud string, exp time.Time) string {
+	sig, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.ES256, Key: key},
+		(&jose.SignerOptions{}).WithHeader("kid", "svid-test-key-1").WithType("JWT"),
+	)
+	if err != nil {
+		log.Fatalf("new signer: %v", err)
+	}
+
+	claims := josejwt.Claims{
+		Subject:  sub,
+		Audience: josejwt.Audience{aud},
+		IssuedAt: josejwt.NewNumericDate(time.Now()),
+		Expiry:   josejwt.NewNumericDate(exp),
+	}
+
+	token, err := josejwt.Signed(sig).Claims(claims).Serialize()
+	if err != nil {
+		log.Fatalf("sign JWT: %v", err)
+	}
+	return token
+}
+
+// writeFile writes data to path, creating the file (overwriting if existing).
+func writeFile(path string, data []byte) {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Fatalf("write %s: %v", path, err)
+	}
 }

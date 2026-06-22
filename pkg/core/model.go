@@ -50,6 +50,9 @@ type WorkloadIdentity struct {
 	SVIDType SVIDType       `json:"svidType"`
 	Claims   map[string]any `json:"claims"`
 	Verified bool           `json:"verified"`
+	// Raw is the raw SVID credential: the compact JWT-SVID token bytes (JWT type)
+	// or the PEM-encoded X509-SVID cert chain (X509 type). Consumed only by the identity verify stage.
+	Raw []byte `json:"raw,omitempty"`
 }
 
 type Reason struct {
