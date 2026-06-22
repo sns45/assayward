@@ -54,12 +54,26 @@ type denySignal struct {
 //
 // TypeMeta of the returned review is always set to admission.k8s.io/v1 / AdmissionReview.
 // response.UID always echoes request.UID.
+// If ar or ar.Request is nil the call returns a well-formed deny (fail-closed) without panicking.
 func Review(ctx context.Context, ar *admissionv1.AdmissionReview, eval Evaluator, mode Mode) *admissionv1.AdmissionReview {
 	out := &admissionv1.AdmissionReview{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "admission.k8s.io/v1",
 			Kind:       "AdmissionReview",
 		},
+	}
+
+	// Nil-guard: fail-closed on a nil or request-less review.
+	if ar == nil || ar.Request == nil {
+		out.Response = &admissionv1.AdmissionResponse{
+			Allowed: false,
+			Result: &metav1.Status{
+				Message: "assayward: nil admission request",
+				Reason:  metav1.StatusReasonBadRequest,
+				Code:    400,
+			},
+		}
+		return out
 	}
 
 	req := ar.Request
@@ -96,7 +110,7 @@ func Review(ctx context.Context, ar *admissionv1.AdmissionReview, eval Evaluator
 		if hasDenySignal {
 			out.Response.Allowed = false
 			out.Response.Result = &metav1.Status{
-				Message: buildDenyMessage(denies),
+				Message: "assayward: " + buildDenyMessage(denies),
 				Reason:  metav1.StatusReasonForbidden,
 				Code:    403,
 			}
@@ -109,25 +123,36 @@ func Review(ctx context.Context, ar *admissionv1.AdmissionReview, eval Evaluator
 		if hasDenySignal {
 			out.Response.Warnings = buildWarnings(denies)
 		}
+
+	default:
+		// Unknown mode: fail-closed (treat like enforce) so misconfiguration is never silently permissive.
+		out.Response.Allowed = false
+		out.Response.Result = &metav1.Status{
+			Message: fmt.Sprintf("assayward: unknown webhook mode %q", mode),
+			Reason:  metav1.StatusReasonForbidden,
+			Code:    403,
+		}
 	}
 
 	return out
 }
 
 // applyDecodeError returns an admission response for a Pod decode failure.
-// In enforce mode this is fail-closed (denied); in audit/warn it allows with a warning.
+// In enforce mode (and for any unknown mode) this is fail-closed (denied).
+// In audit/warn modes it allows with a warning.
 func applyDecodeError(out *admissionv1.AdmissionReview, mode Mode, msg string) *admissionv1.AdmissionReview {
 	switch mode {
-	case ModeEnforce:
+	case ModeAudit, ModeWarn:
+		out.Response.Allowed = true
+		out.Response.Warnings = []string{"assayward: " + msg}
+	default:
+		// ModeEnforce and any unknown mode: fail-closed.
 		out.Response.Allowed = false
 		out.Response.Result = &metav1.Status{
 			Message: msg,
 			Reason:  metav1.StatusReasonForbidden,
 			Code:    403,
 		}
-	default:
-		out.Response.Allowed = true
-		out.Response.Warnings = []string{"assayward: " + msg}
 	}
 	return out
 }

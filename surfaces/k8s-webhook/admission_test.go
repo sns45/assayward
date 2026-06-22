@@ -125,6 +125,9 @@ func TestReview_EnforceMode_DenySignal_Denied(t *testing.T) {
 	if resp.Response.Result.Reason != metav1.StatusReasonForbidden {
 		t.Errorf("enforce deny: expected Reason=Forbidden, got %v", resp.Response.Result.Reason)
 	}
+	if !strings.Contains(resp.Response.Result.Message, "assayward:") {
+		t.Errorf("enforce deny: message should have assayward: prefix, got: %q", resp.Response.Result.Message)
+	}
 	if !strings.Contains(resp.Response.Result.Message, "SIGNATURE_MISSING") {
 		t.Errorf("enforce deny: message should list reason codes, got: %q", resp.Response.Result.Message)
 	}
@@ -332,5 +335,109 @@ func TestReview_DecodeFailure_AuditMode_AllowedWithWarning(t *testing.T) {
 	}
 	if len(resp.Response.Warnings) == 0 {
 		t.Errorf("audit + decode failure: expected warning, got none")
+	}
+}
+
+// --- Nil-request guard tests (fix: issue 1) ---
+
+func TestReview_NilAdmissionReview_DoesNotPanic_ReturnsDeny(t *testing.T) {
+	eval := &stubEvaluator{}
+	resp := Review(context.Background(), nil, eval, ModeEnforce)
+	if resp == nil {
+		t.Fatal("expected non-nil response for nil ar")
+	}
+	if resp.Response == nil {
+		t.Fatal("expected non-nil Response for nil ar")
+	}
+	if resp.Response.Allowed {
+		t.Errorf("nil ar: expected Allowed=false (fail-closed), got true")
+	}
+	if resp.Response.Result == nil {
+		t.Fatal("nil ar: expected non-nil Result")
+	}
+	if resp.Response.Result.Reason != metav1.StatusReasonBadRequest {
+		t.Errorf("nil ar: expected Reason=BadRequest, got %v", resp.Response.Result.Reason)
+	}
+	if !strings.Contains(resp.Response.Result.Message, "nil admission request") {
+		t.Errorf("nil ar: expected message about nil admission request, got: %q", resp.Response.Result.Message)
+	}
+}
+
+func TestReview_NilRequest_DoesNotPanic_ReturnsDeny(t *testing.T) {
+	ar := &admissionv1.AdmissionReview{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "admission.k8s.io/v1",
+			Kind:       "AdmissionReview",
+		},
+		Request: nil,
+	}
+	eval := &stubEvaluator{}
+	resp := Review(context.Background(), ar, eval, ModeEnforce)
+	if resp == nil {
+		t.Fatal("expected non-nil response for nil Request")
+	}
+	if resp.Response == nil {
+		t.Fatal("expected non-nil Response for nil Request")
+	}
+	if resp.Response.Allowed {
+		t.Errorf("nil Request: expected Allowed=false (fail-closed), got true")
+	}
+	if resp.Response.Result == nil {
+		t.Fatal("nil Request: expected non-nil Result")
+	}
+	if resp.Response.Result.Reason != metav1.StatusReasonBadRequest {
+		t.Errorf("nil Request: expected Reason=BadRequest, got %v", resp.Response.Result.Reason)
+	}
+}
+
+// --- Unknown mode fail-closed tests (fix: issue 2) ---
+
+func TestReview_UnknownMode_DenySignal_FailClosed(t *testing.T) {
+	ar := buildReview("test-uid-unknown-mode", "myrepo/app:latest")
+	eval := &stubEvaluator{
+		decisions: map[string]core.Decision{
+			"myrepo/app:latest": {
+				Result:  core.ResultDeny,
+				Reasons: []core.Reason{{Code: "SIGNATURE_MISSING", Severity: core.SeverityCritical}},
+			},
+		},
+	}
+
+	resp := Review(context.Background(), ar, eval, Mode("bogus"))
+
+	if resp.Response == nil {
+		t.Fatal("response is nil")
+	}
+	if resp.Response.Allowed {
+		t.Errorf("unknown mode + deny signal: expected Allowed=false (fail-closed), got true")
+	}
+	if resp.Response.Result == nil {
+		t.Fatal("unknown mode: expected non-nil Result")
+	}
+	if !strings.Contains(resp.Response.Result.Message, "unknown webhook mode") {
+		t.Errorf("unknown mode: expected message about unknown mode, got: %q", resp.Response.Result.Message)
+	}
+}
+
+func TestReview_UnknownMode_DecodeError_FailClosed(t *testing.T) {
+	ar := &admissionv1.AdmissionReview{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "admission.k8s.io/v1",
+			Kind:       "AdmissionReview",
+		},
+		Request: &admissionv1.AdmissionRequest{
+			UID:    "test-uid-unknown-decode",
+			Object: runtime.RawExtension{Raw: []byte(`not-valid-json`)},
+		},
+	}
+	eval := &stubEvaluator{}
+
+	resp := Review(context.Background(), ar, eval, Mode("bogus"))
+
+	if resp.Response == nil {
+		t.Fatal("response is nil")
+	}
+	if resp.Response.Allowed {
+		t.Errorf("unknown mode + decode error: expected Allowed=false (fail-closed), got true")
 	}
 }
