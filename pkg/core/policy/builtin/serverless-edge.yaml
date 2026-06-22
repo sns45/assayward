@@ -1,0 +1,16 @@
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: serverless-edge
+spec:
+  mode: enforce
+  signature:
+    required: false
+  slsa:
+    minLevel: 0
+  vex: {}
+  sbom: {}
+  identity:
+    required: true
+    trustDomain: "spiffe://sns45.dev"
+    idPattern: "spiffe://sns45.dev/*"

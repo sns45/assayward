@@ -1,0 +1,16 @@
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: baseline
+spec:
+  mode: enforce
+  signature:
+    required: true
+    rekor:
+      required: true
+  slsa:
+    minLevel: 0
+  vex: {}
+  sbom: {}
+  identity:
+    required: false
