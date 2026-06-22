@@ -112,6 +112,30 @@ func TestVerifyIdentity_JWT_WrongAudience(t *testing.T) {
 
 // ---- X509-SVID tests ----
 
+// TestVerifyIdentity_JWT_WrongKey verifies that a JWT-SVID signed by a key NOT
+// in the trust bundle is rejected with a signature failure. The trust domain
+// sns45.dev IS found in the bundle (so this is a cryptographic rejection, not a
+// missing-bundle rejection).
+func TestVerifyIdentity_JWT_WrongKey(t *testing.T) {
+	token := testfix.Load(t, "svid/jwt-wrong-key.jwt")
+	bundle := testfix.Load(t, "svid/jwt-bundle.json")
+
+	id := core.WorkloadIdentity{
+		SVIDType: core.SVIDTypeJWT,
+		Raw:      token,
+	}
+	result := verify.VerifyIdentity(id, testImg(), testRoots(bundle))
+
+	if result.Verified {
+		t.Fatalf("expected Verified=false for wrong-key token, got true")
+	}
+	if result.Err == "" {
+		t.Errorf("expected non-empty Err for wrong-key token")
+	}
+}
+
+// ---- X509-SVID tests ----
+
 func TestVerifyIdentity_X509_Valid(t *testing.T) {
 	certPEM := testfix.Load(t, "svid/x509-valid.pem")
 	bundlePEM := testfix.Load(t, "svid/x509-bundle.pem")
@@ -139,5 +163,57 @@ func TestVerifyIdentity_X509_Valid(t *testing.T) {
 	// v0.1 binding: BindingMatch is true when SPIFFE ID is in the expected trust domain.
 	if !result.BindingMatch {
 		t.Errorf("expected BindingMatch=true (SPIFFE ID in trust domain sns45.dev)")
+	}
+}
+
+// TestVerifyIdentity_X509_Expired verifies that a cert whose NotAfter is in the
+// past is rejected. The cert is signed by the trusted CA (chain is valid) but
+// the validity window has elapsed.
+func TestVerifyIdentity_X509_Expired(t *testing.T) {
+	certPEM := testfix.Load(t, "svid/x509-expired.pem")
+	bundlePEM := testfix.Load(t, "svid/x509-bundle.pem")
+
+	id := core.WorkloadIdentity{
+		SVIDType: core.SVIDTypeX509,
+		Raw:      certPEM,
+	}
+	roots := core.TrustRoots{
+		SPIFFEBundles: map[string][]byte{
+			"sns45.dev": bundlePEM,
+		},
+	}
+	result := verify.VerifyIdentity(id, testImg(), roots)
+
+	if result.Verified {
+		t.Fatalf("expected Verified=false for expired X509-SVID, got true")
+	}
+	if result.Err == "" {
+		t.Errorf("expected non-empty Err for expired X509-SVID")
+	}
+}
+
+// TestVerifyIdentity_X509_WrongCA verifies that a cert signed by an untrusted CA
+// (not present in x509-bundle.pem) is rejected. The SPIFFE ID is valid but the
+// signing authority is not in the trust bundle.
+func TestVerifyIdentity_X509_WrongCA(t *testing.T) {
+	certPEM := testfix.Load(t, "svid/x509-wrong-ca.pem")
+	bundlePEM := testfix.Load(t, "svid/x509-bundle.pem")
+
+	id := core.WorkloadIdentity{
+		SVIDType: core.SVIDTypeX509,
+		Raw:      certPEM,
+	}
+	roots := core.TrustRoots{
+		SPIFFEBundles: map[string][]byte{
+			"sns45.dev": bundlePEM,
+		},
+	}
+	result := verify.VerifyIdentity(id, testImg(), roots)
+
+	if result.Verified {
+		t.Fatalf("expected Verified=false for wrong-CA X509-SVID, got true")
+	}
+	if result.Err == "" {
+		t.Errorf("expected non-empty Err for wrong-CA X509-SVID")
 	}
 }

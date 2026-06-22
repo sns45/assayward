@@ -85,9 +85,12 @@ The JWT audience is set to `TestImageDigest` to support the v0.1 WIMSE binding c
 | `svid/jwt-bundle.json` | JWKS containing the ES256 public key for trust domain `sns45.dev`. |
 | `svid/jwt-valid.jwt` | Valid JWT-SVID; `sub=spiffe://sns45.dev/ci/release`, `aud=[TestImageDigest]`, far-future `exp`. |
 | `svid/jwt-expired.jwt` | Expired JWT-SVID; same `sub`/`aud` but `exp` in the past. Used for negative expiry tests. |
-| `svid/jwt-wrong-domain.jwt` | JWT-SVID with `sub=spiffe://evil.example/ci/release`, signed by a DIFFERENT key (also fails bundle validation). Used for wrong-domain negative tests. |
+| `svid/jwt-wrong-domain.jwt` | JWT-SVID with `sub=spiffe://evil.example/ci/release`. Rejected because no JWT bundle exists for `evil.example` (missing-bundle rejection, NOT signature rejection). |
+| `svid/jwt-wrong-key.jwt` | JWT-SVID with `sub=spiffe://sns45.dev/ci/release` signed by an UNAUTHORIZED key NOT in `jwt-bundle.json`. Tests cryptographic signature rejection when the trust domain bundle IS found. |
 | `svid/x509-bundle.pem` | PEM CA root for the X509-SVID trust domain `sns45.dev`. |
 | `svid/x509-valid.pem` | PEM leaf cert chain with URI SAN `spiffe://sns45.dev/ci/release`, signed by the test CA. |
+| `svid/x509-expired.pem` | PEM leaf cert chain with URI SAN `spiffe://sns45.dev/ci/release`, signed by the test CA, but with `NotAfter` 1 hour in the past. Tests expiry rejection. |
+| `svid/x509-wrong-ca.pem` | PEM leaf cert chain with URI SAN `spiffe://sns45.dev/ci/release`, signed by a DIFFERENT CA not in `x509-bundle.pem`. Tests unknown-CA rejection. |
 
 ## Crypto Fixtures (Not Here)
 

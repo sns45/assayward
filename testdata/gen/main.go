@@ -340,24 +340,39 @@ func writeSVIDFixtures(root string) {
 
 	// jwt-valid.jwt: valid JWT-SVID, sub = spiffe://sns45.dev/ci/release,
 	// aud = [testImageDigest], exp far future.
-	validToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(87600*time.Hour))
+	validToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(87600*time.Hour), "svid-test-key-1")
 	writeFile(filepath.Join(svidDir, "jwt-valid.jwt"), []byte(validToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-valid.jwt"))
 
 	// jwt-expired.jwt: same as valid but exp in the past.
-	expiredToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(-1*time.Hour))
+	expiredToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(-1*time.Hour), "svid-test-key-1")
 	writeFile(filepath.Join(svidDir, "jwt-expired.jwt"), []byte(expiredToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-expired.jwt"))
 
-	// jwt-wrong-domain.jwt: sub = spiffe://evil.example/ci/release, signed by
-	// a DIFFERENT key (so it also fails bundle validation), aud = [testImageDigest].
-	wrongKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// jwt-wrong-domain.jwt: sub = spiffe://evil.example/ci/release, aud =
+	// [testImageDigest]. Rejected because the verifier looks up the bundle for
+	// "sns45.dev" (the only trusted domain) and evil.example has no entry there
+	// (missing-bundle rejection, NOT a cryptographic signature rejection).
+	wrongDomainKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatalf("generate wrong-domain JWT key: %v", err)
 	}
-	wrongDomainToken := mustSignJWT(wrongKey, "spiffe://evil.example/ci/release", testImageDigest, time.Now().Add(87600*time.Hour))
+	wrongDomainToken := mustSignJWT(wrongDomainKey, "spiffe://evil.example/ci/release", testImageDigest, time.Now().Add(87600*time.Hour), "svid-test-key-1")
 	writeFile(filepath.Join(svidDir, "jwt-wrong-domain.jwt"), []byte(wrongDomainToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-wrong-domain.jwt"))
+
+	// jwt-wrong-key.jwt: sub = spiffe://sns45.dev/ci/release, aud =
+	// [testImageDigest], far-future exp. Signed by a SECOND freshly generated key
+	// (wrongSignKey) whose public key is NOT in jwt-bundle.json. Trust domain
+	// sns45.dev IS found in the bundle, so this exercises cryptographic signature
+	// rejection (not a missing-bundle rejection).
+	wrongSignKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate wrong-sign JWT key: %v", err)
+	}
+	wrongKeyToken := mustSignJWT(wrongSignKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(87600*time.Hour), "svid-test-key-wrong")
+	writeFile(filepath.Join(svidDir, "jwt-wrong-key.jwt"), []byte(wrongKeyToken))
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-wrong-key.jwt"))
 
 	// --- X509-SVID fixtures ---
 
@@ -420,6 +435,76 @@ func writeSVIDFixtures(root string) {
 	leafChainPEM = append(leafChainPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafCertDER})...)
 	writeFile(filepath.Join(svidDir, "x509-valid.pem"), leafChainPEM)
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-valid.pem"))
+
+	// x509-expired.pem: PEM leaf cert with URI SAN spiffe://sns45.dev/ci/release,
+	// signed by the SAME caKey/caCert as x509-valid.pem, but with NotAfter 1 hour
+	// in the past. Tests expiry rejection.
+	expiredLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate expired leaf key: %v", err)
+	}
+	expiredLeafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "sns45.dev/ci/release"},
+		NotBefore:    time.Now().Add(-2 * time.Hour),
+		NotAfter:     time.Now().Add(-1 * time.Hour),
+		URIs:         []*url.URL{spiffeURI},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	expiredLeafCertDER, err := x509.CreateCertificate(rand.Reader, expiredLeafTemplate, caCert, &expiredLeafKey.PublicKey, caKey)
+	if err != nil {
+		log.Fatalf("create expired leaf cert: %v", err)
+	}
+	expiredLeafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: expiredLeafCertDER})
+	writeFile(filepath.Join(svidDir, "x509-expired.pem"), expiredLeafPEM)
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-expired.pem"))
+
+	// x509-wrong-ca.pem: PEM leaf cert with URI SAN spiffe://sns45.dev/ci/release,
+	// signed by a SECOND, completely separate CA (wrongCACert/wrongCAKey) that is
+	// NOT in x509-bundle.pem. Tests unknown-CA rejection.
+	wrongCAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate wrong CA key: %v", err)
+	}
+	wrongCATemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(100),
+		Subject:               pkix.Name{CommonName: "untrusted-ca.example SVID Test CA"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(87600 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	wrongCACertDER, err := x509.CreateCertificate(rand.Reader, wrongCATemplate, wrongCATemplate, &wrongCAKey.PublicKey, wrongCAKey)
+	if err != nil {
+		log.Fatalf("create wrong CA cert: %v", err)
+	}
+	wrongCACert, err := x509.ParseCertificate(wrongCACertDER)
+	if err != nil {
+		log.Fatalf("parse wrong CA cert: %v", err)
+	}
+
+	wrongCALeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate wrong-CA leaf key: %v", err)
+	}
+	wrongCALeafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(101),
+		Subject:      pkix.Name{CommonName: "sns45.dev/ci/release"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(87600 * time.Hour),
+		URIs:         []*url.URL{spiffeURI},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	wrongCALeafCertDER, err := x509.CreateCertificate(rand.Reader, wrongCALeafTemplate, wrongCACert, &wrongCALeafKey.PublicKey, wrongCAKey)
+	if err != nil {
+		log.Fatalf("create wrong-CA leaf cert: %v", err)
+	}
+	wrongCALeafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: wrongCALeafCertDER})
+	writeFile(filepath.Join(svidDir, "x509-wrong-ca.pem"), wrongCALeafPEM)
+	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-wrong-ca.pem"))
 }
 
 // mustMarshalJWKS marshals the public key of key into a JWKS document suitable
@@ -439,11 +524,11 @@ func mustMarshalJWKS(key *ecdsa.PrivateKey) []byte {
 	return b
 }
 
-// mustSignJWT creates and signs a compact JWT-SVID token.
-func mustSignJWT(key *ecdsa.PrivateKey, sub, aud string, exp time.Time) string {
+// mustSignJWT creates and signs a compact JWT-SVID token with the given kid.
+func mustSignJWT(key *ecdsa.PrivateKey, sub, aud string, exp time.Time, kid string) string {
 	sig, err := jose.NewSigner(
 		jose.SigningKey{Algorithm: jose.ES256, Key: key},
-		(&jose.SignerOptions{}).WithHeader("kid", "svid-test-key-1").WithType("JWT"),
+		(&jose.SignerOptions{}).WithHeader("kid", kid).WithType("JWT"),
 	)
 	if err != nil {
 		log.Fatalf("new signer: %v", err)

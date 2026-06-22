@@ -1,1 +1,1 @@
-{"keys":[{"use":"sig","kty":"EC","kid":"svid-test-key-1","crv":"P-256","alg":"ES256","x":"1l6L-RI1Cb42UiEFeyl65FLUguuFP2q2GO4F3CPoN7A","y":"LpDI2frZa7arrmidzjQHT3ajnUvD7aS3OJkV3UaNJic"}]}
+{"keys":[{"use":"sig","kty":"EC","kid":"svid-test-key-1","crv":"P-256","alg":"ES256","x":"uBanFQwWIGB6R0QIrb-NQFRGvcXCNQg7xR3AZkBz3BE","y":"oDbZ5F7VYOee8gaMWx9tkXntFXeFytxi2zV2tMCQdLg"}]}
