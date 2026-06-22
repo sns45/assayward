@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/sns45/assayward/cmd/assayward/discover"
 	core "github.com/sns45/assayward/pkg/core"
 	"github.com/sns45/assayward/pkg/core/engine"
-	"github.com/sns45/assayward/pkg/core/policy"
 	"github.com/sns45/assayward/pkg/core/policy/builtin"
 )
 
@@ -32,15 +29,8 @@ func registerVerifyCmd(parent *cobra.Command, stdout io.Writer) {
 	}
 
 	var (
-		flagBundles       []string
-		flagPolicy        string
-		flagPolicyFile    string
-		flagImage         string
-		flagSigstoreRoot  string
-		flagSPIFFEBundles []string
-		flagSVID          string
-		flagSVIDType      string
-		flagOutput        string
+		inputs     evalInputs
+		flagOutput string
 	)
 
 	cmd := &cobra.Command{
@@ -60,106 +50,11 @@ printed as indented JSON. Exit codes: 0=allow/audit, 1=deny, 2=error.`,
 			}
 
 			// ----------------------------------------------------------
-			// 1. Resolve policy
+			// 1-4. Assemble inputs (policy, evidence, trust roots)
 			// ----------------------------------------------------------
-			var pol policy.Policy
-
-			switch {
-			case flagPolicyFile != "":
-				raw, err := os.ReadFile(flagPolicyFile)
-				if err != nil {
-					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: read policy file: %v", err)}
-				}
-				pol, err = policy.Parse(raw)
-				if err != nil {
-					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: parse policy file: %v", err)}
-				}
-
-			case flagPolicy != "":
-				raw, ok := builtinPolicies[flagPolicy]
-				if !ok {
-					return &CLIError{
-						Code: ExitError,
-						Msg:  fmt.Sprintf("verify: unknown built-in policy %q: choose baseline|slsa-l3|serverless-edge", flagPolicy),
-					}
-				}
-				var err error
-				pol, err = policy.Parse(raw)
-				if err != nil {
-					// Should never happen with embedded built-ins, but guard defensively.
-					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: parse built-in policy %q: %v", flagPolicy, err)}
-				}
-
-			default:
-				return &CLIError{Code: ExitError, Msg: "verify: exactly one of --policy or --policy-file is required"}
-			}
-
-			// ----------------------------------------------------------
-			// 2. Parse --image
-			// ----------------------------------------------------------
-			if flagImage == "" {
-				return &CLIError{Code: ExitError, Msg: "verify: --image is required"}
-			}
-			imageRef, err := parseImageRef(flagImage)
+			ev, pol, roots, err := inputs.build("verify")
 			if err != nil {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: --image: %v", err)}
-			}
-
-			// ----------------------------------------------------------
-			// 3. Assemble Evidence
-			// ----------------------------------------------------------
-			atts, err := discover.FromBundles(flagBundles)
-			if err != nil {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: %v", err)}
-			}
-
-			ev := core.Evidence{
-				Image:        imageRef,
-				Attestations: atts,
-				FetchedAt:    systemClock{}.Now(),
-			}
-
-			if flagSVID != "" {
-				raw, err := os.ReadFile(flagSVID)
-				if err != nil {
-					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: read --svid: %v", err)}
-				}
-				svidType := resolveSVIDType(flagSVIDType, raw)
-				ev.Identity = &core.WorkloadIdentity{
-					SVIDType: svidType,
-					Raw:      raw,
-				}
-			}
-
-			// ----------------------------------------------------------
-			// 4. Build TrustRoots
-			// ----------------------------------------------------------
-			roots := core.TrustRoots{}
-
-			if flagSigstoreRoot != "" {
-				raw, err := os.ReadFile(flagSigstoreRoot)
-				if err != nil {
-					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: read --sigstore-trust-root: %v", err)}
-				}
-				roots.SigstoreTUF = raw
-			}
-
-			if len(flagSPIFFEBundles) > 0 {
-				roots.SPIFFEBundles = make(map[string][]byte, len(flagSPIFFEBundles))
-				for _, entry := range flagSPIFFEBundles {
-					domain, path, ok := strings.Cut(entry, "=")
-					if !ok {
-						return &CLIError{
-							Code: ExitError,
-							Msg:  fmt.Sprintf("verify: --spiffe-bundle %q: must be trustDomain=path", entry),
-						}
-					}
-					raw, err := os.ReadFile(path)
-					if err != nil {
-						return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: read --spiffe-bundle %q: %v", path, err)}
-					}
-					roots.SPIFFEBundles[domain] = raw
-				}
+				return err
 			}
 
 			// ----------------------------------------------------------
@@ -170,8 +65,6 @@ printed as indented JSON. Exit codes: 0=allow/audit, 1=deny, 2=error.`,
 			// ----------------------------------------------------------
 			// 6. Output
 			// ----------------------------------------------------------
-			// Only "json" is supported in this task; text rendering belongs to the
-			// explain command (a later task). Validation already happened at step 0.
 			out, err := json.MarshalIndent(dec, "", "  ")
 			if err != nil {
 				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: marshal decision: %v", err)}
@@ -186,52 +79,10 @@ printed as indented JSON. Exit codes: 0=allow/audit, 1=deny, 2=error.`,
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&flagBundles, "bundle", nil, "local attestation file path (repeatable)")
-	cmd.Flags().StringVar(&flagPolicy, "policy", "", "built-in policy name: baseline|slsa-l3|serverless-edge")
-	cmd.Flags().StringVar(&flagPolicyFile, "policy-file", "", "path to a TrustPolicy YAML file")
-	cmd.Flags().StringVar(&flagImage, "image", "", "image ref as name@sha256:<hex> (required)")
-	cmd.Flags().StringVar(&flagSigstoreRoot, "sigstore-trust-root", "", "path to a Sigstore trusted-root JSON")
-	cmd.Flags().StringArrayVar(&flagSPIFFEBundles, "spiffe-bundle", nil, "trustDomain=path entries (repeatable)")
-	cmd.Flags().StringVar(&flagSVID, "svid", "", "path to SVID credential (JWT token or PEM X.509)")
-	cmd.Flags().StringVar(&flagSVIDType, "svid-type", "auto", "jwt|x509|auto")
+	registerEvalFlags(cmd, &inputs)
 	cmd.Flags().StringVar(&flagOutput, "output", "json", "output format: json")
 
 	parent.AddCommand(cmd)
-}
-
-// parseImageRef splits "name@sha256:<hex>" on the LAST '@' and validates
-// that the digest portion starts with "sha256:".
-func parseImageRef(s string) (core.ImageRef, error) {
-	idx := strings.LastIndex(s, "@")
-	if idx < 0 {
-		return core.ImageRef{}, fmt.Errorf("must be name@sha256:<hex>, got %q", s)
-	}
-	name := s[:idx]
-	digest := s[idx+1:]
-	if !strings.HasPrefix(digest, "sha256:") {
-		return core.ImageRef{}, fmt.Errorf("digest must start with sha256:, got %q", digest)
-	}
-	if name == "" {
-		return core.ImageRef{}, fmt.Errorf("image name must not be empty")
-	}
-	return core.ImageRef{Name: name, Digest: digest}, nil
-}
-
-// resolveSVIDType determines the SVIDType based on the --svid-type flag and
-// the raw credential bytes. "auto" detects x509 when the content starts with
-// "-----BEGIN", otherwise assumes JWT.
-func resolveSVIDType(flagValue string, raw []byte) core.SVIDType {
-	switch flagValue {
-	case "jwt":
-		return core.SVIDTypeJWT
-	case "x509":
-		return core.SVIDTypeX509
-	default: // "auto"
-		if strings.HasPrefix(strings.TrimSpace(string(raw)), "-----BEGIN") {
-			return core.SVIDTypeX509
-		}
-		return core.SVIDTypeJWT
-	}
 }
 
 // init registers the verify subcommand on the package-level rootCmd.
