@@ -97,17 +97,22 @@ func TestBundleCmd_SignAndVerify_CorrectKey(t *testing.T) {
 		t.Fatalf("Pack() error: %v", err)
 	}
 	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
-	manifestDigest, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
+	_, err = bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
 	if err != nil {
 		t.Fatalf("Push() error: %v", err)
 	}
 
-	if err := bundle.SignAndPushReferrer(ctx, manifestDigest, ref, priv, pushOpts); err != nil {
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest() error: %v", err)
+	}
+
+	if err := bundle.SignAndPushReferrer(ctx, resolvedDesc, ref, priv, pushOpts); err != nil {
 		t.Fatalf("SignAndPushReferrer() error: %v", err)
 	}
 
 	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
-	if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, &priv.PublicKey, pullOpts); err != nil {
+	if err := bundle.PullAndVerifyReferrer(ctx, resolvedDesc.Digest.String(), ref, &priv.PublicKey, pullOpts); err != nil {
 		t.Errorf("PullAndVerifyReferrer() error: %v", err)
 	}
 }
@@ -137,17 +142,22 @@ func TestBundleCmd_SignAndVerify_WrongKey(t *testing.T) {
 		t.Fatalf("Pack() error: %v", err)
 	}
 	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
-	manifestDigest, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
+	_, err = bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
 	if err != nil {
 		t.Fatalf("Push() error: %v", err)
 	}
 
-	if err := bundle.SignAndPushReferrer(ctx, manifestDigest, ref, priv, pushOpts); err != nil {
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest() error: %v", err)
+	}
+
+	if err := bundle.SignAndPushReferrer(ctx, resolvedDesc, ref, priv, pushOpts); err != nil {
 		t.Fatalf("SignAndPushReferrer() error: %v", err)
 	}
 
 	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
-	if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, &wrongPriv.PublicKey, pullOpts); err == nil {
+	if err := bundle.PullAndVerifyReferrer(ctx, resolvedDesc.Digest.String(), ref, &wrongPriv.PublicKey, pullOpts); err == nil {
 		t.Error("PullAndVerifyReferrer() with wrong key returned nil, want error")
 	}
 }

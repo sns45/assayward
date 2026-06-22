@@ -113,6 +113,29 @@ func TestPack_ArtifactType(t *testing.T) {
 	}
 }
 
+// TestPack_Deterministic verifies that packing the same policies twice yields
+// identical manifest digests. This ensures that Go map non-determinism does not
+// cause divergent digests between pack calls (and therefore between sign and
+// verify when both repack locally).
+func TestPack_Deterministic(t *testing.T) {
+	ctx := context.Background()
+	policies := builtin.All()
+	meta := bundle.Meta{BundleName: "det-test", Version: "v1.0.0"}
+
+	_, desc1, err := bundle.Pack(ctx, policies, meta)
+	if err != nil {
+		t.Fatalf("Pack() first call error: %v", err)
+	}
+	_, desc2, err := bundle.Pack(ctx, policies, meta)
+	if err != nil {
+		t.Fatalf("Pack() second call error: %v", err)
+	}
+
+	if desc1.Digest != desc2.Digest {
+		t.Errorf("Pack() is non-deterministic: first=%s second=%s", desc1.Digest, desc2.Digest)
+	}
+}
+
 // TestPush_DigestPrefix verifies the returned digest starts with sha256:.
 func TestPush_DigestPrefix(t *testing.T) {
 	ctx := context.Background()

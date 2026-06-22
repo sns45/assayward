@@ -205,32 +205,25 @@ TODO(M6): add --sigstore flag for Sigstore keyless signing + forgeseal verify.`,
 				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: load key %q: %v", keyFile, err)}
 			}
 
-			// Resolve the manifest digest for the ref by pulling metadata.
-			policies, _, pullErr := bundle.Pull(ctx, ref, bundle.PullOptions{
+			// Resolve the manifest descriptor directly from the registry.
+			// This binds the signature to the actual stored manifest digest
+			// without repacking locally.
+			subjectDesc, resolveErr := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{
 				PlainHTTP: plainHTTP,
 				Transport: transport,
 			})
-			if pullErr != nil || len(policies) == 0 {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: resolve manifest at %q: %v", ref, pullErr)}
+			if resolveErr != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: resolve manifest at %q: %v", ref, resolveErr)}
 			}
 
-			// Repack to get the same deterministic digest.
-			store, manifestDesc, packErr := bundle.Pack(ctx, policies, bundle.Meta{})
-			if packErr != nil {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: repack: %v", packErr)}
-			}
-			_ = store
-
-			manifestDigest := manifestDesc.Digest.String()
-
-			if err := bundle.SignAndPushReferrer(ctx, manifestDigest, ref, priv, bundle.PushOptions{
+			if err := bundle.SignAndPushReferrer(ctx, subjectDesc, ref, priv, bundle.PushOptions{
 				PlainHTTP: plainHTTP,
 				Transport: transport,
 			}); err != nil {
 				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: %v", err)}
 			}
 
-			fmt.Fprintf(stdout, "signed %s\ndigest: %s\n", ref, manifestDigest)
+			fmt.Fprintf(stdout, "signed %s\ndigest: %s\n", ref, subjectDesc.Digest.String())
 			return nil
 		},
 	}
@@ -275,31 +268,28 @@ TODO(M6): add --sigstore flag for forgeseal keyless verification.`,
 
 			pub, err := loadECPublicKey(pubKeyFile)
 			if err != nil {
+				// Unreadable/unparseable key file is a usage/input error.
 				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: load key %q: %v", pubKeyFile, err)}
 			}
 
-			// Resolve manifest digest by repacking from pulled policies.
-			policies, _, pullErr := bundle.Pull(ctx, ref, bundle.PullOptions{
+			// Resolve the manifest descriptor directly from the registry so the
+			// digest being verified is the actual stored manifest digest.
+			subjectDesc, resolveErr := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{
 				PlainHTTP: plainHTTP,
 				Transport: transport,
 			})
-			if pullErr != nil || len(policies) == 0 {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: resolve manifest at %q: %v", ref, pullErr)}
+			if resolveErr != nil {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: resolve manifest at %q: %v", ref, resolveErr)}
 			}
 
-			store, manifestDesc, packErr := bundle.Pack(ctx, policies, bundle.Meta{})
-			if packErr != nil {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: repack: %v", packErr)}
-			}
-			_ = store
-
-			manifestDigest := manifestDesc.Digest.String()
+			manifestDigest := subjectDesc.Digest.String()
 
 			if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, pub, bundle.PullOptions{
 				PlainHTTP: plainHTTP,
 				Transport: transport,
 			}); err != nil {
 				fmt.Fprintf(stdout, "INVALID: %v\n", err)
+				// Invalid or missing signature is an exit-1 deny, not a usage error.
 				return &CLIError{Code: ExitDeny, Msg: fmt.Sprintf("bundle verify: %v", err)}
 			}
 

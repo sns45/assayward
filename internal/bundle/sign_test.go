@@ -109,17 +109,23 @@ func TestSignAndVerify_ReferrerRoundtrip(t *testing.T) {
 
 	ref := fmt.Sprintf("%s/sigtest:v0.0.1", host)
 	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
-	manifestDigest, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
+	_, err = bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
 	if err != nil {
 		t.Fatalf("Push() error: %v", err)
 	}
 
-	if err := bundle.SignAndPushReferrer(ctx, manifestDigest, ref, priv, pushOpts); err != nil {
+	// Resolve the stored manifest descriptor to get the authoritative digest + size.
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest() error: %v", err)
+	}
+
+	if err := bundle.SignAndPushReferrer(ctx, resolvedDesc, ref, priv, pushOpts); err != nil {
 		t.Fatalf("SignAndPushReferrer() error: %v", err)
 	}
 
 	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
-	if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, pub, pullOpts); err != nil {
+	if err := bundle.PullAndVerifyReferrer(ctx, resolvedDesc.Digest.String(), ref, pub, pullOpts); err != nil {
 		t.Fatalf("PullAndVerifyReferrer() error: %v", err)
 	}
 }
@@ -144,17 +150,87 @@ func TestPullAndVerifyReferrer_WrongKey(t *testing.T) {
 
 	ref := fmt.Sprintf("%s/wrongkey:v0.0.1", host)
 	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
-	manifestDigest, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
+	_, err = bundle.Push(ctx, store, manifestDesc, ref, pushOpts)
 	if err != nil {
 		t.Fatalf("Push() error: %v", err)
 	}
 
-	if err := bundle.SignAndPushReferrer(ctx, manifestDigest, ref, priv, pushOpts); err != nil {
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest() error: %v", err)
+	}
+
+	if err := bundle.SignAndPushReferrer(ctx, resolvedDesc, ref, priv, pushOpts); err != nil {
 		t.Fatalf("SignAndPushReferrer() error: %v", err)
 	}
 
 	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
-	if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, wrongPub, pullOpts); err == nil {
+	if err := bundle.PullAndVerifyReferrer(ctx, resolvedDesc.Digest.String(), ref, wrongPub, pullOpts); err == nil {
 		t.Error("PullAndVerifyReferrer() with wrong key returned nil, want error")
+	}
+}
+
+// TestResolveDigest_SignVerify_EndToEnd proves that signing with a resolved
+// descriptor and verifying against that resolved digest succeeds, and that
+// a wrong key still fails (verifying crypto is not weakened).
+func TestResolveDigest_SignVerify_EndToEnd(t *testing.T) {
+	ctx := context.Background()
+	priv, pub := generateTestKey(t)
+	_, wrongPub := generateTestKey(t)
+
+	srv, transport := newSignTestRegistry(t)
+	host := srv.Listener.Addr().String()
+
+	policies := builtin.All()
+	meta := bundle.Meta{BundleName: "resolve-test", Version: "v1.0.0"}
+
+	store, manifestDesc, err := bundle.Pack(ctx, policies, meta)
+	if err != nil {
+		t.Fatalf("Pack() error: %v", err)
+	}
+
+	ref := fmt.Sprintf("%s/resolvetest:v1.0.0", host)
+	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
+	if _, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts); err != nil {
+		t.Fatalf("Push() error: %v", err)
+	}
+
+	// Resolve the real registry descriptor (binds signature to stored manifest).
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest() error: %v", err)
+	}
+
+	// The resolved digest must start with sha256:.
+	if d := resolvedDesc.Digest.String(); len(d) < 7 || d[:7] != "sha256:" {
+		t.Errorf("resolved digest %q does not start with sha256:", d)
+	}
+
+	// The resolved size must be non-zero (OCI spec requires it for subject).
+	if resolvedDesc.Size <= 0 {
+		t.Errorf("resolved descriptor Size = %d, want > 0", resolvedDesc.Size)
+	}
+
+	// Sign with the resolved descriptor and push the referrer.
+	if err := bundle.SignAndPushReferrer(ctx, resolvedDesc, ref, priv, pushOpts); err != nil {
+		t.Fatalf("SignAndPushReferrer() error: %v", err)
+	}
+
+	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
+
+	// Happy path: correct key verifies OK.
+	if err := bundle.PullAndVerifyReferrer(ctx, resolvedDesc.Digest.String(), ref, pub, pullOpts); err != nil {
+		t.Errorf("PullAndVerifyReferrer() correct key error: %v", err)
+	}
+
+	// Negative: wrong key must fail.
+	if err := bundle.PullAndVerifyReferrer(ctx, resolvedDesc.Digest.String(), ref, wrongPub, pullOpts); err == nil {
+		t.Error("PullAndVerifyReferrer() wrong key returned nil, want error")
+	}
+
+	// Negative: tampered digest must fail (no referrer found for a different digest).
+	tamperedDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	if err := bundle.PullAndVerifyReferrer(ctx, tamperedDigest, ref, pub, pullOpts); err == nil {
+		t.Error("PullAndVerifyReferrer() tampered digest returned nil, want error")
 	}
 }

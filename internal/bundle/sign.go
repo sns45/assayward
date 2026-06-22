@@ -43,7 +43,6 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/memory"
-	orasremote "oras.land/oras-go/v2/registry/remote"
 )
 
 // SigArtifactType is the OCI artifactType for a bundle signature referrer.
@@ -92,30 +91,24 @@ func Verify(manifestDigest string, sig []byte, pubKey *ecdsa.PublicKey) error {
 	return nil
 }
 
-// SignAndPushReferrer signs the bundle at manifestDigest, then pushes the
+// SignAndPushReferrer signs the bundle described by subjectDesc, then pushes the
 // signature as an OCI referrer artifact (subject = the bundle manifest).
 //
-// ref is the OCI reference used to derive the repository and host
-// (the tag is not used; the referrer subject is the digest).
-func SignAndPushReferrer(ctx context.Context, manifestDigest string, ref string, privKey *ecdsa.PrivateKey, opts PushOptions) error {
+// subjectDesc is the full manifest descriptor obtained from the registry
+// (Digest, Size, MediaType all populated). ref is the OCI reference used to
+// derive the repository and host (the tag is not used).
+func SignAndPushReferrer(ctx context.Context, subjectDesc ocispec.Descriptor, ref string, privKey *ecdsa.PrivateKey, opts PushOptions) error {
+	manifestDigest := subjectDesc.Digest.String()
 	sigBytes, err := Sign(manifestDigest, privKey)
 	if err != nil {
 		return err
 	}
 
-	// Build a subject descriptor from the manifest digest.
-	dgst, err := godigest.Parse(manifestDigest)
-	if err != nil {
-		return fmt.Errorf("bundle/sign: parse manifest digest %q: %w", manifestDigest, err)
-	}
 	subject := ocispec.Descriptor{
 		MediaType:    ocispec.MediaTypeImageManifest,
 		ArtifactType: ArtifactType,
-		Digest:       dgst,
-		// Size is not strictly required for referrer subject, but oras validates
-		// non-zero size for manifest descriptors. Use the sig bytes size as a
-		// reasonable stand-in. The registry does not re-verify it on push.
-		Size: int64(len(sigBytes)),
+		Digest:       subjectDesc.Digest,
+		Size:         subjectDesc.Size,
 	}
 
 	// Pack into a minimal memory store.
@@ -229,41 +222,4 @@ func PullAndVerifyReferrer(ctx context.Context, manifestDigest string, ref strin
 	}
 
 	return Verify(manifestDigest, sigBytes, pubKey)
-}
-
-// fetchSigLayer fetches the signature layer bytes from a referrer manifest
-// descriptor in the given repository.
-func fetchSigLayer(ctx context.Context, repo *orasremote.Repository, referrerDesc ocispec.Descriptor) ([]byte, error) {
-	// Fetch the manifest blob.
-	rc, err := repo.Fetch(ctx, referrerDesc)
-	if err != nil {
-		return nil, fmt.Errorf("bundle/sign: fetch sig manifest: %w", err)
-	}
-	defer rc.Close()
-	var rawManifest bytes.Buffer
-	if _, err := rawManifest.ReadFrom(rc); err != nil {
-		return nil, fmt.Errorf("bundle/sign: read sig manifest: %w", err)
-	}
-
-	var manifest ocispec.Manifest
-	if err := json.Unmarshal(rawManifest.Bytes(), &manifest); err != nil {
-		return nil, fmt.Errorf("bundle/sign: unmarshal sig manifest: %w", err)
-	}
-
-	if len(manifest.Layers) == 0 {
-		return nil, errors.New("bundle/sign: sig manifest has no layers")
-	}
-
-	layerDesc := manifest.Layers[0]
-	layerRC, err := repo.Fetch(ctx, layerDesc)
-	if err != nil {
-		return nil, fmt.Errorf("bundle/sign: fetch sig layer: %w", err)
-	}
-	defer layerRC.Close()
-
-	var sigBuf bytes.Buffer
-	if _, err := sigBuf.ReadFrom(layerRC); err != nil {
-		return nil, fmt.Errorf("bundle/sign: read sig layer: %w", err)
-	}
-	return sigBuf.Bytes(), nil
 }

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -79,11 +80,19 @@ type PullOptions struct {
 func Pack(ctx context.Context, policies map[string][]byte, meta Meta) (*memory.Store, ocispec.Descriptor, error) {
 	store := memory.New()
 
-	// Build layers: one per policy file.
+	// Build layers: one per policy file, in sorted order so that identical
+	// policy content always yields an identical manifest digest (deterministic).
+	sortedNames := make([]string, 0, len(policies))
+	for name := range policies {
+		sortedNames = append(sortedNames, name)
+	}
+	sort.Strings(sortedNames)
+
 	layers := make([]ocispec.Descriptor, 0, len(policies))
 	fileNames := make([]string, 0, len(policies))
 
-	for name, rawYAML := range policies {
+	for _, name := range sortedNames {
+		rawYAML := policies[name]
 		desc := ocispec.Descriptor{
 			MediaType: PolicyMediaType,
 			Digest:    godigest.FromBytes(rawYAML),
@@ -124,6 +133,21 @@ func Pack(ctx context.Context, policies map[string][]byte, meta Meta) (*memory.S
 	}
 
 	return store, manifestDesc, nil
+}
+
+// ResolveDigest resolves the manifest digest for the given OCI reference
+// directly from the registry (without downloading layers). This binds
+// signatures to the actual stored manifest rather than a local repack.
+func ResolveDigest(ctx context.Context, ref string, opts PullOptions) (ocispec.Descriptor, error) {
+	repo, err := newRepo(ref, opts.PlainHTTP, opts.Transport)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("bundle: resolve: build remote: %w", err)
+	}
+	desc, err := repo.Resolve(ctx, ref)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("bundle: resolve %q: %w", ref, err)
+	}
+	return desc, nil
 }
 
 // Push copies the packed bundle from store to the OCI registry at ref.
