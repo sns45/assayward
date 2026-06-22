@@ -15,3 +15,8 @@
 
 # SDD scratch (ledger, briefs, reports)
 .superpowers/
+
+# npm surface
+surfaces/npm/node_modules/
+surfaces/npm/dist/
+surfaces/npm/bun.lockb
