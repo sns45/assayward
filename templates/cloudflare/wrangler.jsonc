@@ -1,0 +1,47 @@
+{
+  // Cloudflare Workers configuration for assayward-gate
+  // https://developers.cloudflare.com/workers/wrangler/configuration/
+  "name": "assayward-gate",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-09-23",
+
+  // nodejs_compat is required to make globalThis.Go (from wasm_exec.js)
+  // work in the workerd runtime. It enables Node.js built-in polyfills and
+  // process/buffer globals that the Go WASM glue relies on.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // WASM MODULE BINDING NOTES
+  // --------------------------
+  // Cloudflare Workers supports importing .wasm files directly as ES modules.
+  // However, Go's js/wasm target (GOOS=js GOARCH=wasm) uses a custom host ABI
+  // via wasm_exec.js that does NOT match the standard WebAssembly Component
+  // Model or the Workers "wasm_modules" binding. The Workers runtime (workerd)
+  // does not expose a "module" binding for Go js/wasm because:
+  //   1. Go js/wasm expects globalThis.Go (from wasm_exec.js), which is a
+  //      Node.js/browser-style runtime glue, not a WASI or Component Model
+  //      interface.
+  //   2. Workers "wasm_modules" bindings are for standard WASM modules with
+  //      imported memories and exported functions - not the Go JS ABI.
+  //
+  // CHOSEN APPROACH (Option A):
+  //   - The wasm binary is fetched at runtime via the Assets service OR
+  //     passed as an ArrayBuffer bound at deploy time via the "data_blobs"
+  //     binding (binary blob support, GA in wrangler 3+).
+  //   - wasm_exec.js is inlined/evaluated via eval() in the Worker.
+  //   - nodejs_compat flag enables process/Buffer globals needed by wasm_exec.js.
+  //
+  // See src/wasm-loader.ts for the loading implementation and its caveats.
+
+  // data_blobs: bind the wasm binary as a raw ArrayBuffer accessible in
+  // the Worker as ASSAYWARD_WASM (type: ArrayBuffer).
+  // Wrangler copies the file at build time. Path is relative to wrangler.jsonc.
+  "data_blobs": {
+    "ASSAYWARD_WASM": "assets/assayward_js.wasm"
+  },
+
+  // The wasm_exec.js glue is inlined as a text blob (string) so we can
+  // eval() it inside the Worker to register globalThis.Go.
+  "text_blobs": {
+    "WASM_EXEC_JS": "assets/wasm_exec.js"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "assayward-gate",
+  "version": "0.1.0",
+  "description": "Cloudflare Workers trust gate using the assayward wasm policy engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "bunx vitest run",
+    "test:watch": "bunx vitest",
+    "test:logic": "bun test test/gate-logic.test.ts",
+    "assets:copy": "mkdir -p assets && cp ../../dist/assayward_js.wasm assets/ && cp ../../dist/wasm_exec.js assets/",
+    "predev": "bun run assets:copy",
+    "predeploy": "bun run assets:copy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.3",
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.30.0"
+  }
+}
