@@ -209,7 +209,7 @@ func main() {
 					"version":  "1.3.0",
 					"purl":     "pkg:npm/left-pad@1.3.0",
 					"licenses": []interface{}{map[string]interface{}{"license": map[string]string{"id": "MIT"}}},
-					"supplier": "Organization: npm",
+					"supplier": map[string]interface{}{"name": "Organization: npm"},
 					"bom-ref":  "pkg:npm/left-pad@1.3.0",
 				},
 				map[string]interface{}{
@@ -218,7 +218,7 @@ func main() {
 					"version":  "1.0.0",
 					"purl":     "pkg:golang/example.com/x@1.0.0",
 					"licenses": []interface{}{map[string]interface{}{"license": map[string]string{"id": "Apache-2.0"}}},
-					"supplier": "Organization: example.com",
+					"supplier": map[string]interface{}{"name": "Organization: example.com"},
 					"bom-ref":  "pkg:golang/example.com/x@1.0.0",
 				},
 			},
@@ -238,7 +238,7 @@ func main() {
 			"@id":       "https://example.com/vex/affected-critical-1",
 			"author":    "sns45-ci",
 			"timestamp": "2024-01-01T00:00:00Z",
-			"version":   "1",
+			"version":   1,
 			"statements": []interface{}{
 				map[string]interface{}{
 					"vulnerability": map[string]interface{}{
@@ -256,7 +256,7 @@ func main() {
 					},
 					"status": "affected",
 					// No justification field — status is "affected", justification not applicable.
-					"impact_statement": "Component is directly vulnerable; no mitigations in place.",
+					"action_statement": "Component is directly vulnerable; no mitigations in place.",
 				},
 			},
 		},
@@ -275,7 +275,7 @@ func main() {
 			"@id":       "https://example.com/vex/not-affected-1",
 			"author":    "sns45-ci",
 			"timestamp": "2024-01-01T00:00:00Z",
-			"version":   "1",
+			"version":   1,
 			"statements": []interface{}{
 				map[string]interface{}{
 					"vulnerability": map[string]interface{}{
