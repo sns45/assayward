@@ -160,6 +160,19 @@ func Parse(b []byte) (Policy, error) {
 		version = versionFromAPIVersion(w.APIVersion)
 	}
 
+	// Validate mode: must be one of the three recognised values.
+	switch w.Spec.Mode {
+	case ModeEnforce, ModeAudit, ModeWarn:
+		// valid
+	default:
+		return Policy{}, fmt.Errorf("policy: invalid mode %q: must be enforce|audit|warn", w.Spec.Mode)
+	}
+
+	// Validate version: at least one source must yield a non-empty string.
+	if version == "" {
+		return Policy{}, fmt.Errorf("policy: policy has no resolvable version")
+	}
+
 	var keyless *KeylessRule
 	if w.Spec.Signature.Keyless != nil {
 		keyless = &KeylessRule{
@@ -204,10 +217,12 @@ func Parse(b []byte) (Policy, error) {
 
 // versionFromAPIVersion extracts the version token from an apiVersion string
 // of the form "group/version" (e.g. "assayward.dev/v1alpha1" -> "v1alpha1").
-// If no slash is present, the entire string is returned.
+// Returns an empty string when no slash is present, signalling that no version
+// token could be parsed and the caller must fall back to metadata.version or
+// return an error.
 func versionFromAPIVersion(apiVersion string) string {
 	if idx := strings.LastIndex(apiVersion, "/"); idx >= 0 {
 		return apiVersion[idx+1:]
 	}
-	return apiVersion
+	return ""
 }

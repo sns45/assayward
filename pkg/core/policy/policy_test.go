@@ -189,3 +189,68 @@ spec:
 		}
 	}
 }
+
+// TestParseSBOMFields verifies that spec.sbom.required and
+// spec.sbom.disallowedLicenses are correctly mapped into Policy.SBOM.
+func TestParseSBOMFields(t *testing.T) {
+	const sbomYAML = `
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: sbom-policy
+spec:
+  mode: enforce
+  sbom:
+    required: true
+    disallowedLicenses:
+      - "GPL-3.0"
+`
+	p, err := policy.Parse([]byte(sbomYAML))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !p.SBOM.Required {
+		t.Error("SBOM.Required: got false, want true")
+	}
+	if len(p.SBOM.DisallowedLicenses) != 1 || p.SBOM.DisallowedLicenses[0] != "GPL-3.0" {
+		t.Errorf("SBOM.DisallowedLicenses: got %v, want [GPL-3.0]", p.SBOM.DisallowedLicenses)
+	}
+}
+
+// TestParseInvalidModeReturnsError verifies that an unrecognised mode value
+// causes Parse to return an error rather than silently accepting it.
+func TestParseInvalidModeReturnsError(t *testing.T) {
+	const bogusYAML = `
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: bad-mode-policy
+spec:
+  mode: bogus
+`
+	_, err := policy.Parse([]byte(bogusYAML))
+	if err == nil {
+		t.Fatal("Parse: expected error for invalid mode, got nil")
+	}
+}
+
+// TestParseEmptyVersionReturnsError verifies that a document with neither
+// metadata.version nor a parseable version token in apiVersion causes Parse
+// to return an error, satisfying the "version in every Decision" constraint.
+func TestParseEmptyVersionReturnsError(t *testing.T) {
+	// "assayward.dev" has no slash-separated version token; metadata.version is
+	// absent. The resolved version would be the entire string or empty, so the
+	// implementation must detect the missing version and return an error.
+	const noVersionYAML = `
+apiVersion: assayward.dev
+kind: TrustPolicy
+metadata:
+  name: no-version-policy
+spec:
+  mode: enforce
+`
+	_, err := policy.Parse([]byte(noVersionYAML))
+	if err == nil {
+		t.Fatal("Parse: expected error when version cannot be resolved, got nil")
+	}
+}
