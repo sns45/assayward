@@ -12,7 +12,9 @@ import (
 type wasmVerifier struct{}
 
 // NewSignatureVerifier returns the fail-closed WASM stub. It is only compiled
-// into WASM builds (GOOS=wasip1 GOARCH=wasm or GOOS=js GOARCH=wasm).
+// into WASM builds matched by the `wasm` build tag (e.g. GOOS=wasip1 GOARCH=wasm).
+// Note: the `wasm` tag matches any WASM target (wasip1/wasm, js/wasm, etc.);
+// it does NOT exclusively match GOOS=js GOARCH=wasm.
 func NewSignatureVerifier() SignatureVerifier {
 	return &wasmVerifier{}
 }

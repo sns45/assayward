@@ -77,12 +77,17 @@ func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots cor
 	}
 
 	// Extract issuer and SAN from the verified certificate summary.
-	var issuer, san string
-	if res.Signature != nil && res.Signature.Certificate != nil {
-		cert := res.Signature.Certificate
-		issuer = cert.Extensions.Issuer
-		san = cert.SubjectAlternativeName
+	// Fail closed: a keyless verification that produces no certificate identity
+	// is a malformed or unexpected result and must not be treated as success.
+	if res.Signature == nil || res.Signature.Certificate == nil {
+		return SignatureResult{
+			Verified: false,
+			Err:      "verified bundle missing certificate identity",
+		}
 	}
+	cert := res.Signature.Certificate
+	issuer := cert.Extensions.Issuer
+	san := cert.SubjectAlternativeName
 
 	// RekorLogged is true when the verifier successfully verified a tlog entry.
 	rekorLogged := len(res.VerifiedTimestamps) > 0
