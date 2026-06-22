@@ -52,6 +52,14 @@ printed as indented JSON. Exit codes: 0=allow/audit, 1=deny, 2=error.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// ----------------------------------------------------------
+			// 0. Validate --output early so an invalid format fails fast
+			//    at exit 2 without doing any verification work.
+			// ----------------------------------------------------------
+			if flagOutput != "json" {
+				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: unsupported --output %q: only json is supported", flagOutput)}
+			}
+
+			// ----------------------------------------------------------
 			// 1. Resolve policy
 			// ----------------------------------------------------------
 			var pol policy.Policy
@@ -163,11 +171,7 @@ printed as indented JSON. Exit codes: 0=allow/audit, 1=deny, 2=error.`,
 			// 6. Output
 			// ----------------------------------------------------------
 			// Only "json" is supported in this task; text rendering belongs to the
-			// explain command (a later task).
-			if flagOutput != "json" {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: unsupported --output %q: only json is supported", flagOutput)}
-			}
-
+			// explain command (a later task). Validation already happened at step 0.
 			out, err := json.MarshalIndent(dec, "", "  ")
 			if err != nil {
 				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("verify: marshal decision: %v", err)}

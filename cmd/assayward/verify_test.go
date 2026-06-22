@@ -101,18 +101,23 @@ func TestVerifySLSAL3Denies(t *testing.T) {
 	}
 }
 
-// TestVerifyUnknownPolicyExits2 verifies that an unknown built-in name exits with code 2.
+// TestVerifyUnknownPolicyExits2 verifies that an unknown built-in name exits with code 2
+// and that no decision JSON is written to stdout (errors go to stderr only).
 func TestVerifyUnknownPolicyExits2(t *testing.T) {
 	root := testdataRoot()
 	args := append(baseVerifyArgs(root), "--policy", "bogus")
 
-	code, _ := runVerify(t, args)
+	code, stdout := runVerify(t, args)
 	if code != ExitError {
 		t.Errorf("unknown policy: exit code = %d, want %d (error)", code, ExitError)
 	}
+	if stdout != "" {
+		t.Errorf("unknown policy: expected empty stdout on error path, got: %s", stdout)
+	}
 }
 
-// TestVerifyMissingImageExits2 verifies that omitting --image exits with code 2.
+// TestVerifyMissingImageExits2 verifies that omitting --image exits with code 2
+// and that no decision JSON is written to stdout (errors go to stderr only).
 func TestVerifyMissingImageExits2(t *testing.T) {
 	root := testdataRoot()
 	// Build args without --image.
@@ -122,8 +127,26 @@ func TestVerifyMissingImageExits2(t *testing.T) {
 		"--policy", "baseline",
 	}
 
-	code, _ := runVerify(t, args)
+	code, stdout := runVerify(t, args)
 	if code != ExitError {
 		t.Errorf("missing --image: exit code = %d, want %d (error)", code, ExitError)
+	}
+	if stdout != "" {
+		t.Errorf("missing --image: expected empty stdout on error path, got: %s", stdout)
+	}
+}
+
+// TestVerifyBogusOutputExits2 verifies that --output=bogus exits with code 2 without
+// performing any verification work (validation must happen before policy resolution).
+func TestVerifyBogusOutputExits2(t *testing.T) {
+	root := testdataRoot()
+	args := append(baseVerifyArgs(root), "--policy", "baseline", "--output", "bogus")
+
+	code, stdout := runVerify(t, args)
+	if code != ExitError {
+		t.Errorf("bogus --output: exit code = %d, want %d (error)", code, ExitError)
+	}
+	if stdout != "" {
+		t.Errorf("bogus --output: expected empty stdout on error path, got: %s", stdout)
 	}
 }

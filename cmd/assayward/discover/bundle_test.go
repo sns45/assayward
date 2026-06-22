@@ -54,7 +54,7 @@ func TestFromBundles_UnreadablePath(t *testing.T) {
 	}
 	path := f.Name()
 	f.Close()
-	os.Remove(path)
+	_ = os.Remove(path)
 
 	_, err = discover.FromBundles([]string{path})
 	if err == nil {
