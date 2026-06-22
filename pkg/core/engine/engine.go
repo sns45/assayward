@@ -4,24 +4,153 @@
 package engine
 
 import (
+	"encoding/json"
+	"strings"
+
 	core "github.com/sns45/assayward/pkg/core"
 	"github.com/sns45/assayward/pkg/core/policy"
+	"github.com/sns45/assayward/pkg/core/verify"
 )
 
 // Evaluate is the single entry point used by every surface (CLI, wasm shim, webhook).
 // Pure: no I/O; time via clk.
 //
-// This is a skeleton: verify stages are wired in Task 1.14.
-// For now it always returns ResultAllow with the evidence summary populated from ev.
+// Wiring order:
+//  1. Signature: runs the SignatureVerifier over every attestation; aggregates.
+//  2. Predicates: DecodeDSSE each attestation; routes by predicateType to SLSA/SBOM/VEX.
+//     For each predicate type the LAST successfully parsed result wins (deterministic
+//     when a single attestation of each type is present, which is the normal case).
+//     Attestations that do not decode as DSSE (e.g. bare Sigstore bundles) are
+//     skipped in this loop without affecting signature aggregation.
+//  3. Identity: if ev.Identity != nil, runs VerifyIdentity.
+//  4. Projects each result to a policy View and calls EvaluatePolicy.
 func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk core.Clock) core.Decision {
 	summary := buildSummary(ev)
 
-	// Reasons is initialized as non-nil empty so JSON marshals to [] not null.
-	// Later tasks append Reason values and sort by Code.
-	reasons := []core.Reason{}
+	// -------------------------------------------------------------------------
+	// Step 1: Signature aggregation
+	// -------------------------------------------------------------------------
+	sigVerifier := verify.NewSignatureVerifier()
+
+	// sigView accumulates across all attestations.
+	// Available is true when the native verifier ran (any result had Available==true).
+	// Verified is true when any attestation verified successfully.
+	// Identity fields are carried from the first successfully verified attestation.
+	var sigView policy.SignatureResultView
+
+	for _, att := range ev.Attestations {
+		r := sigVerifier.Verify(att, ev.Image, roots)
+		if r.Available {
+			sigView.Available = true
+		}
+		if r.Verified && !sigView.Verified {
+			// Carry identity fields from the first verified attestation.
+			sigView.Verified = true
+			sigView.Issuer = r.Issuer
+			sigView.SubjectIdentity = r.SubjectIdentity
+			sigView.RekorLogged = r.RekorLogged
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Step 2: Predicate routing via DSSE decoding.
+	// Route by predicateType: contains "slsa.dev/provenance" -> SLSA;
+	// contains "cyclonedx" -> SBOM; contains "openvex" -> VEX.
+	// Last successful parse of each type wins (deterministic for the normal
+	// case of one attestation per predicate type).
+	// Attestations that fail DecodeDSSE (e.g. bare Sigstore bundles) are
+	// skipped here — they are handled by the signature verifier above.
+	// -------------------------------------------------------------------------
+	var slsaResult verify.SLSAResult
+	var sbomResult verify.SBOMResult
+	var vexResult verify.VEXResult
+
+	for _, att := range ev.Attestations {
+		env, err := verify.DecodeDSSE(att.Envelope)
+		if err != nil {
+			// Not a bare DSSE envelope (e.g. a Sigstore bundle JSON) — skip.
+			continue
+		}
+
+		// Determine the predicate type from the decoded payload.
+		predType := extractPredicateType(env.Payload)
+
+		switch {
+		case strings.Contains(predType, "slsa.dev/provenance"):
+			slsaResult = verify.VerifySLSA(env, ev.Image)
+		case strings.Contains(predType, "cyclonedx"):
+			sbomResult = verify.VerifySBOM(env)
+		case strings.Contains(predType, "openvex"):
+			vexResult = verify.VerifyVEX(env)
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Step 3: Identity
+	// -------------------------------------------------------------------------
+	var idResult verify.IdentityResult
+	if ev.Identity != nil {
+		idResult = verify.VerifyIdentity(*ev.Identity, ev.Image, roots)
+	}
+
+	// -------------------------------------------------------------------------
+	// Step 4: Project to Views
+	// -------------------------------------------------------------------------
+
+	// SLSA view — zero value (BuildLevel=0, Verified=false, etc.) when no SLSA
+	// attestation was present or parseable.
+	slsaView := policy.SLSAView{
+		Verified:           slsaResult.Verified,
+		BuilderID:          slsaResult.BuilderID,
+		BuildLevel:         slsaResult.BuildLevel,
+		SubjectDigestMatch: slsaResult.SubjectDigestMatch,
+	}
+
+	// SBOM view — Licenses contains the non-empty License of each Component.
+	var licenses []string
+	for _, c := range sbomResult.Components {
+		if c.License != "" {
+			licenses = append(licenses, c.License)
+		}
+	}
+	sbomView := policy.SBOMView{
+		Present:  sbomResult.Present,
+		Licenses: licenses,
+	}
+
+	// VEX view — AffectedCVEs contains CVE IDs whose Statuses value == "affected".
+	var affectedCVEs []string
+	for cve, status := range vexResult.Statuses {
+		if status == "affected" {
+			affectedCVEs = append(affectedCVEs, cve)
+		}
+	}
+	vexView := policy.VEXView{
+		Present:      vexResult.Present,
+		AffectedCVEs: affectedCVEs,
+	}
+
+	// Identity view.
+	idView := policy.IdentityView{
+		Present:      ev.Identity != nil,
+		Verified:     idResult.Verified,
+		SPIFFEID:     idResult.SPIFFEID,
+		TrustDomain:  idResult.TrustDomain,
+		BindingMatch: idResult.BindingMatch,
+	}
+
+	// -------------------------------------------------------------------------
+	// Step 5: Evaluate policy and build Decision.
+	// -------------------------------------------------------------------------
+	result, reasons := policy.EvaluatePolicy(pol, sigView, slsaView, sbomView, vexView, idView)
+
+	// Guarantee non-nil slice so JSON marshals to [] not null.
+	if reasons == nil {
+		reasons = []core.Reason{}
+	}
 
 	return core.Decision{
-		Result:    core.ResultAllow,
+		Result:    result,
 		Policy:    pol.Name + "@" + pol.Version,
 		Reasons:   reasons,
 		Evidence:  summary,
@@ -48,4 +177,19 @@ func buildSummary(ev core.Evidence) core.EvidenceSummary {
 		IdentityPresent:  identityPresent,
 		SPIFFEID:         spiffeID,
 	}
+}
+
+// minStmt is a minimal in-toto Statement used to extract predicateType.
+type minStmt struct {
+	PredicateType string `json:"predicateType"`
+}
+
+// extractPredicateType extracts the predicateType field from a raw in-toto
+// Statement JSON payload. Returns empty string on any parse error.
+func extractPredicateType(payload []byte) string {
+	var s minStmt
+	if err := json.Unmarshal(payload, &s); err != nil {
+		return ""
+	}
+	return s.PredicateType
 }

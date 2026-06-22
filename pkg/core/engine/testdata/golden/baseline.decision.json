@@ -1,0 +1,32 @@
+{
+  "result": "allow",
+  "policy": "baseline@v1alpha1",
+  "reasons": [
+    {
+      "code": "REKOR_REQUIRED_MISSING",
+      "severity": "high",
+      "detail": "Rekor transparency log entry present",
+      "met": true
+    },
+    {
+      "code": "SIGNATURE_REQUIRED_MISSING",
+      "severity": "high",
+      "detail": "signature verified",
+      "met": true
+    }
+  ],
+  "evidence": {
+    "image": {
+      "name": "ghcr.io/sns45/example:1.0.0",
+      "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "attestationTypes": [
+      "",
+      "",
+      "",
+      ""
+    ],
+    "identityPresent": true
+  },
+  "decidedAt": "2026-01-01T00:00:00Z"
+}

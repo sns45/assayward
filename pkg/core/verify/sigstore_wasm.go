@@ -25,7 +25,8 @@ func NewSignatureVerifier() SignatureVerifier {
 // signature MUST treat this as a verification failure (fail-closed).
 func (v *wasmVerifier) Verify(_ core.Attestation, _ core.ImageRef, _ core.TrustRoots) SignatureResult {
 	return SignatureResult{
-		Verified: false,
-		Err:      "signature verification unavailable in wasm runtime",
+		Available: false, // verifier cannot run in WASM (fail-closed)
+		Verified:  false,
+		Err:       "signature verification unavailable in wasm runtime",
 	}
 }

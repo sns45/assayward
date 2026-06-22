@@ -6,6 +6,11 @@ import (
 
 // SignatureResult carries the outcome of a signature verification attempt.
 type SignatureResult struct {
+	// Available is true when the verifier actually ran (i.e. the native Sigstore
+	// verifier was active). It is false in WASM stub environments where the
+	// verifier could not be compiled in. When Available is false, Verified is
+	// always false.
+	Available       bool
 	Verified        bool
 	Issuer          string
 	SubjectIdentity string

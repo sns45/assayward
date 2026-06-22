@@ -35,19 +35,19 @@ func NewSignatureVerifier() SignatureVerifier {
 // signed; that enforcement belongs to the policy layer.
 func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots core.TrustRoots) SignatureResult {
 	if len(roots.SigstoreTUF) == 0 {
-		return SignatureResult{Verified: false, Err: "no trust material"}
+		return SignatureResult{Available: true, Verified: false, Err: "no trust material"}
 	}
 
 	// Parse trusted root from injected JSON bytes.
 	trustedRoot, err := root.NewTrustedRootFromJSON(roots.SigstoreTUF)
 	if err != nil {
-		return SignatureResult{Verified: false, Err: fmt.Sprintf("parse trusted root: %v", err)}
+		return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("parse trusted root: %v", err)}
 	}
 
 	// Parse the Sigstore bundle from att.Envelope bytes.
 	var b bundle.Bundle
 	if unmarshalErr := b.UnmarshalJSON(att.Envelope); unmarshalErr != nil {
-		return SignatureResult{Verified: false, Err: fmt.Sprintf("parse bundle: %v", unmarshalErr)}
+		return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("parse bundle: %v", unmarshalErr)}
 	}
 
 	// Build a verifier: require tlog inclusion (Rekor) + an observer
@@ -60,7 +60,7 @@ func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots cor
 		sgverify.WithObserverTimestamps(1),
 	)
 	if err != nil {
-		return SignatureResult{Verified: false, Err: fmt.Sprintf("create verifier: %v", err)}
+		return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("create verifier: %v", err)}
 	}
 
 	// Use WithoutIdentitiesUnsafe so the verifier only checks the
@@ -73,7 +73,7 @@ func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots cor
 
 	res, err := sev.Verify(&b, policy)
 	if err != nil {
-		return SignatureResult{Verified: false, Err: fmt.Sprintf("verify: %v", err)}
+		return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("verify: %v", err)}
 	}
 
 	// Extract issuer and SAN from the verified certificate summary.
@@ -81,8 +81,9 @@ func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots cor
 	// is a malformed or unexpected result and must not be treated as success.
 	if res.Signature == nil || res.Signature.Certificate == nil {
 		return SignatureResult{
-			Verified: false,
-			Err:      "verified bundle missing certificate identity",
+			Available: true,
+			Verified:  false,
+			Err:       "verified bundle missing certificate identity",
 		}
 	}
 	cert := res.Signature.Certificate
@@ -93,6 +94,7 @@ func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots cor
 	rekorLogged := len(res.VerifiedTimestamps) > 0
 
 	return SignatureResult{
+		Available:       true,
 		Verified:        true,
 		Issuer:          issuer,
 		SubjectIdentity: san,

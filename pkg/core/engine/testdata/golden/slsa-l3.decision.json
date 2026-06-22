@@ -1,0 +1,80 @@
+{
+  "result": "deny",
+  "policy": "slsa-l3@v1alpha1",
+  "reasons": [
+    {
+      "code": "IDENTITY_BINDING_MISMATCH",
+      "severity": "high",
+      "detail": "workload identity binding matches the artifact",
+      "met": true
+    },
+    {
+      "code": "IDENTITY_REQUIRED_MISSING",
+      "severity": "high",
+      "detail": "workload identity is present and verified",
+      "met": true
+    },
+    {
+      "code": "IDENTITY_TRUST_DOMAIN_MISMATCH",
+      "severity": "high",
+      "detail": "identity trust domain and ID pattern match",
+      "met": true
+    },
+    {
+      "code": "REKOR_REQUIRED_MISSING",
+      "severity": "high",
+      "detail": "Rekor transparency log entry present",
+      "met": true
+    },
+    {
+      "code": "SIGNATURE_IDENTITY_MISMATCH",
+      "severity": "high",
+      "detail": "signature issuer or subject identity does not match the keyless policy",
+      "met": false
+    },
+    {
+      "code": "SIGNATURE_REQUIRED_MISSING",
+      "severity": "high",
+      "detail": "signature verified",
+      "met": true
+    },
+    {
+      "code": "SLSA_BUILDER_NOT_ALLOWED",
+      "severity": "high",
+      "detail": "SLSA builder is in the allowed builders list",
+      "met": true
+    },
+    {
+      "code": "SLSA_LEVEL_BELOW_THRESHOLD",
+      "severity": "high",
+      "detail": "SLSA build level meets the required minimum",
+      "met": true
+    },
+    {
+      "code": "SUBJECT_DIGEST_MISMATCH",
+      "severity": "critical",
+      "detail": "SLSA provenance subject digest matches the artifact digest",
+      "met": true
+    },
+    {
+      "code": "VEX_UNMITIGATED_CRITICAL",
+      "severity": "critical",
+      "detail": "one or more CVEs have VEX status 'affected' (unmitigated)",
+      "met": false
+    }
+  ],
+  "evidence": {
+    "image": {
+      "name": "ghcr.io/sns45/example:1.0.0",
+      "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "attestationTypes": [
+      "",
+      "",
+      "",
+      ""
+    ],
+    "identityPresent": true
+  },
+  "decidedAt": "2026-01-01T00:00:00Z"
+}
