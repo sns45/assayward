@@ -110,8 +110,6 @@ func TestVerifyIdentity_JWT_WrongAudience(t *testing.T) {
 	}
 }
 
-// ---- X509-SVID tests ----
-
 // TestVerifyIdentity_JWT_WrongKey verifies that a JWT-SVID signed by a key NOT
 // in the trust bundle is rejected with a signature failure. The trust domain
 // sns45.dev IS found in the bundle (so this is a cryptographic rejection, not a
