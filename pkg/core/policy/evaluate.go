@@ -94,78 +94,89 @@ func EvaluatePolicy(
 	// Signature checks
 	// -----------------------------------------------------------------------
 
-	// SIGNATURE_VERIFICATION_UNAVAILABLE (Critical): fail-closed — signature
-	// required but verifier could not run at all.
-	if pol.Signature.Required {
-		if !sig.Available {
-			emit(core.Reason{
-				Code:     "SIGNATURE_VERIFICATION_UNAVAILABLE",
-				Severity: core.SeverityCritical,
-				Detail:   "signature verification is required but the verifier was unavailable",
-				Met:      false,
-			})
-		} else if !sig.Verified {
-			// SIGNATURE_REQUIRED_MISSING (High): verifier ran but found no valid signature.
-			emit(core.Reason{
-				Code:     "SIGNATURE_REQUIRED_MISSING",
-				Severity: core.SeverityHigh,
-				Detail:   "signature is required but no valid signature was found",
-				Met:      false,
-			})
-		} else {
-			emit(core.Reason{
-				Code:     "SIGNATURE_REQUIRED_MISSING",
-				Severity: core.SeverityHigh,
-				Detail:   "signature verified",
-				Met:      true,
-			})
-		}
-	}
+	// sigChecksRequested is true when any signature-dependent check is configured.
+	// When the verifier could not run (sig.Available==false) we collapse all
+	// signature checks into a single SIGNATURE_VERIFICATION_UNAVAILABLE to avoid
+	// both misleading dual-codes and a fail-open hole (e.g. Rekor.Required==true
+	// but Available==false would otherwise silently allow).
+	sigChecksRequested := pol.Signature.Required || pol.Signature.Rekor.Required || pol.Signature.Keyless != nil
 
-	// SIGNATURE_IDENTITY_MISMATCH (High): keyless rule set, sig verified, but
-	// issuer or subject identity does not match.
-	if pol.Signature.Keyless != nil {
-		if sig.Verified {
-			issuerOK := sig.Issuer == pol.Signature.Keyless.Issuer
-			patternOK := globMatch(pol.Signature.Keyless.IdentityPattern, sig.SubjectIdentity)
-			if !issuerOK || !patternOK {
+	if sigChecksRequested && !sig.Available {
+		// SIGNATURE_VERIFICATION_UNAVAILABLE (Critical): the verifier could not
+		// run; any signature-dependent check cannot be meaningfully evaluated.
+		// Emit ONLY this code and skip the individual sub-checks below.
+		emit(core.Reason{
+			Code:     "SIGNATURE_VERIFICATION_UNAVAILABLE",
+			Severity: core.SeverityCritical,
+			Detail:   "signature verification is required but the verifier was unavailable",
+			Met:      false,
+		})
+	} else if sig.Available {
+		// Verifier ran — evaluate individual signature sub-checks.
+
+		// SIGNATURE_REQUIRED_MISSING (High): verifier ran but found no valid signature.
+		if pol.Signature.Required {
+			if !sig.Verified {
 				emit(core.Reason{
-					Code:     "SIGNATURE_IDENTITY_MISMATCH",
+					Code:     "SIGNATURE_REQUIRED_MISSING",
 					Severity: core.SeverityHigh,
-					Detail:   "signature issuer or subject identity does not match the keyless policy",
+					Detail:   "signature is required but no valid signature was found",
 					Met:      false,
 				})
 			} else {
 				emit(core.Reason{
-					Code:     "SIGNATURE_IDENTITY_MISMATCH",
+					Code:     "SIGNATURE_REQUIRED_MISSING",
 					Severity: core.SeverityHigh,
-					Detail:   "signature issuer and subject identity match the keyless policy",
+					Detail:   "signature verified",
 					Met:      true,
 				})
 			}
 		}
-		// When sig.Verified is false and Keyless is set, the SIGNATURE_REQUIRED_MISSING
-		// or SIGNATURE_VERIFICATION_UNAVAILABLE check has already fired; we do not emit
-		// SIGNATURE_IDENTITY_MISMATCH on top of it.
-	}
 
-	// REKOR_REQUIRED_MISSING (High): Rekor transparency log entry required but
-	// the signature was not logged.
-	if pol.Signature.Rekor.Required {
-		if !sig.RekorLogged {
-			emit(core.Reason{
-				Code:     "REKOR_REQUIRED_MISSING",
-				Severity: core.SeverityHigh,
-				Detail:   "Rekor transparency log entry is required but was not found",
-				Met:      false,
-			})
-		} else {
-			emit(core.Reason{
-				Code:     "REKOR_REQUIRED_MISSING",
-				Severity: core.SeverityHigh,
-				Detail:   "Rekor transparency log entry present",
-				Met:      true,
-			})
+		// SIGNATURE_IDENTITY_MISMATCH (High): keyless rule set, sig verified, but
+		// issuer or subject identity does not match.
+		if pol.Signature.Keyless != nil {
+			if sig.Verified {
+				issuerOK := sig.Issuer == pol.Signature.Keyless.Issuer
+				patternOK := globMatch(pol.Signature.Keyless.IdentityPattern, sig.SubjectIdentity)
+				if !issuerOK || !patternOK {
+					emit(core.Reason{
+						Code:     "SIGNATURE_IDENTITY_MISMATCH",
+						Severity: core.SeverityHigh,
+						Detail:   "signature issuer or subject identity does not match the keyless policy",
+						Met:      false,
+					})
+				} else {
+					emit(core.Reason{
+						Code:     "SIGNATURE_IDENTITY_MISMATCH",
+						Severity: core.SeverityHigh,
+						Detail:   "signature issuer and subject identity match the keyless policy",
+						Met:      true,
+					})
+				}
+			}
+			// When sig.Verified is false and Keyless is set, the SIGNATURE_REQUIRED_MISSING
+			// check has already fired; we do not emit SIGNATURE_IDENTITY_MISMATCH on top of it.
+		}
+
+		// REKOR_REQUIRED_MISSING (High): Rekor transparency log entry required but
+		// the signature was not logged.
+		if pol.Signature.Rekor.Required {
+			if !sig.RekorLogged {
+				emit(core.Reason{
+					Code:     "REKOR_REQUIRED_MISSING",
+					Severity: core.SeverityHigh,
+					Detail:   "Rekor transparency log entry is required but was not found",
+					Met:      false,
+				})
+			} else {
+				emit(core.Reason{
+					Code:     "REKOR_REQUIRED_MISSING",
+					Severity: core.SeverityHigh,
+					Detail:   "Rekor transparency log entry present",
+					Met:      true,
+				})
+			}
 		}
 	}
 
@@ -347,6 +358,7 @@ func EvaluatePolicy(
 
 			// IDENTITY_BINDING_MISMATCH (High): identity is verified but the binding
 			// to the artifact does not match.
+			// v0.1: binding is implicitly required whenever identity is required (fail-closed); an opt-out knob is deferred.
 			emit(core.Reason{
 				Code:     "IDENTITY_BINDING_MISMATCH",
 				Severity: core.SeverityHigh,
@@ -407,6 +419,8 @@ func EvaluatePolicy(
 // globMatch reports whether pattern matches s. The only special character is
 // '*' which matches any sequence of characters including '/'. Literal parts of
 // the pattern are regexp-quoted. The match is anchored (full-string).
+//
+// An empty pattern matches any string.
 //
 // On a regexp compilation error (malformed pattern) the function returns false
 // rather than panicking, so a bad policy pattern is a safe no-match.

@@ -517,6 +517,7 @@ func TestWarnModeAllowsOnFailure(t *testing.T) {
 	sig := policy.SignatureResultView{Available: true, Verified: false}
 	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
 
+	// Finding 6: assert ResultAllow explicitly so a future result-enum change is caught.
 	if result != core.ResultAllow {
 		t.Errorf("warn mode: expected ResultAllow, got %q", result)
 	}
@@ -526,6 +527,89 @@ func TestWarnModeAllowsOnFailure(t *testing.T) {
 	}
 	if r.Met {
 		t.Error("warn mode: reason should still show Met=false (warning)")
+	}
+}
+
+// TestRekorOnlyUnavailableIsFailClosed: Signature.Required=false but Rekor.Required=true and
+// Available=false. Without the consolidated gating this would fail-open (Rekor check silently
+// skipped). With the fix it must Deny with SIGNATURE_VERIFICATION_UNAVAILABLE only.
+func TestRekorOnlyUnavailableIsFailClosed(t *testing.T) {
+	pol := minPol(policy.ModeEnforce)
+	pol.Signature.Required = false      // signature itself is not required
+	pol.Signature.Rekor.Required = true // but Rekor log is required
+
+	sig := policy.SignatureResultView{Available: false, Verified: false}
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+
+	// Must deny (fail-closed); the verifier could not run so Rekor cannot be checked.
+	if result != core.ResultDeny {
+		t.Errorf("expected ResultDeny (fail-closed), got %q", result)
+	}
+	// SIGNATURE_VERIFICATION_UNAVAILABLE must be present.
+	r, ok := findReason(reasons, "SIGNATURE_VERIFICATION_UNAVAILABLE")
+	if !ok {
+		t.Fatal("expected SIGNATURE_VERIFICATION_UNAVAILABLE to be emitted")
+	}
+	if r.Met {
+		t.Error("SIGNATURE_VERIFICATION_UNAVAILABLE must have Met=false")
+	}
+	if r.Severity != core.SeverityCritical {
+		t.Errorf("expected SeverityCritical, got %q", r.Severity)
+	}
+	// REKOR_REQUIRED_MISSING must NOT fire (it cannot be evaluated; emitting it would be misleading).
+	if hasCode(reasons, "REKOR_REQUIRED_MISSING") {
+		t.Error("REKOR_REQUIRED_MISSING must not fire when verifier is unavailable (misleading dual-code)")
+	}
+}
+
+// TestSigAndRekorBothUnavailable: Signature.Required=true, Rekor.Required=true, Available=false.
+// Only SIGNATURE_VERIFICATION_UNAVAILABLE should fire; neither SIGNATURE_REQUIRED_MISSING nor
+// REKOR_REQUIRED_MISSING should appear.
+func TestSigAndRekorBothUnavailable(t *testing.T) {
+	pol := minPol(policy.ModeEnforce)
+	pol.Signature.Required = true
+	pol.Signature.Rekor.Required = true
+
+	sig := policy.SignatureResultView{Available: false, Verified: false}
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+
+	if result != core.ResultDeny {
+		t.Errorf("expected ResultDeny, got %q", result)
+	}
+	if !hasCode(reasons, "SIGNATURE_VERIFICATION_UNAVAILABLE") {
+		t.Error("expected SIGNATURE_VERIFICATION_UNAVAILABLE")
+	}
+	if hasCode(reasons, "SIGNATURE_REQUIRED_MISSING") {
+		t.Error("SIGNATURE_REQUIRED_MISSING must not fire when verifier is unavailable")
+	}
+	if hasCode(reasons, "REKOR_REQUIRED_MISSING") {
+		t.Error("REKOR_REQUIRED_MISSING must not fire when verifier is unavailable")
+	}
+}
+
+// TestKeylessUnavailableNoIdentityMismatch: Available=false AND Keyless != nil AND
+// Signature.Required=true. SIGNATURE_IDENTITY_MISMATCH must NOT be emitted; only
+// SIGNATURE_VERIFICATION_UNAVAILABLE fires (Finding 5).
+func TestKeylessUnavailableNoIdentityMismatch(t *testing.T) {
+	pol := minPol(policy.ModeEnforce)
+	pol.Signature.Required = true
+	pol.Signature.Keyless = &policy.KeylessRule{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		IdentityPattern: "https://github.com/sns45/*",
+	}
+
+	sig := policy.SignatureResultView{Available: false, Verified: false}
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+
+	if result != core.ResultDeny {
+		t.Errorf("expected ResultDeny, got %q", result)
+	}
+	if !hasCode(reasons, "SIGNATURE_VERIFICATION_UNAVAILABLE") {
+		t.Error("expected SIGNATURE_VERIFICATION_UNAVAILABLE")
+	}
+	// SIGNATURE_IDENTITY_MISMATCH must not be emitted when the verifier could not run.
+	if hasCode(reasons, "SIGNATURE_IDENTITY_MISMATCH") {
+		t.Error("SIGNATURE_IDENTITY_MISMATCH must not fire when verifier is unavailable (Finding 5)")
 	}
 }
 
