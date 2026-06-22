@@ -217,14 +217,6 @@ func assertParity(t *testing.T, caseName string, nativeOut, wasmOut []byte) {
 		caseName, len(nativeOut), nativeOut, len(wasmOut), wasmOut, diffOffset)
 }
 
-// min is included for Go versions that predate the builtin (pre-1.21 compat).
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // TestParityIdentityStage (case 1): serverless-edge policy — identity required,
 // signature NOT required. go-spiffe JWT-SVID validation runs in wasm; both
 // sides must validate the JWT-SVID and produce identical decisions.
@@ -256,7 +248,13 @@ spec:
 	if err != nil {
 		t.Fatalf("native runEvaluate error: %v", err)
 	}
+	if len(nativeOut) == 0 || !json.Valid(nativeOut) {
+		t.Fatal("native output empty or invalid JSON")
+	}
 	wasmOut := runWasm(t, envelope)
+	if len(wasmOut) == 0 || !json.Valid(wasmOut) {
+		t.Fatal("wasm output empty or invalid JSON")
+	}
 
 	assertParity(t, "IdentityStage", nativeOut, wasmOut)
 }
@@ -291,7 +289,13 @@ spec:
 	if err != nil {
 		t.Fatalf("native runEvaluate error: %v", err)
 	}
+	if len(nativeOut) == 0 || !json.Valid(nativeOut) {
+		t.Fatal("native output empty or invalid JSON")
+	}
 	wasmOut := runWasm(t, envelope)
+	if len(wasmOut) == 0 || !json.Valid(wasmOut) {
+		t.Fatal("wasm output empty or invalid JSON")
+	}
 
 	assertParity(t, "SLSAStage", nativeOut, wasmOut)
 }
@@ -327,7 +331,13 @@ spec:
 	if err != nil {
 		t.Fatalf("native runEvaluate error: %v", err)
 	}
+	if len(nativeOut) == 0 || !json.Valid(nativeOut) {
+		t.Fatal("native output empty or invalid JSON")
+	}
 	wasmOut := runWasm(t, envelope)
+	if len(wasmOut) == 0 || !json.Valid(wasmOut) {
+		t.Fatal("wasm output empty or invalid JSON")
+	}
 
 	assertParity(t, "VEXStage", nativeOut, wasmOut)
 }
@@ -361,6 +371,9 @@ spec:
 	var outputs [3][]byte
 	for i := range outputs {
 		outputs[i] = runWasm(t, envelope)
+		if len(outputs[i]) == 0 || !json.Valid(outputs[i]) {
+			t.Fatalf("wasm output empty or invalid JSON on run %d", i)
+		}
 	}
 
 	for i := 1; i < 3; i++ {
