@@ -20,3 +20,4 @@
 surfaces/npm/node_modules/
 surfaces/npm/dist/
 surfaces/npm/bun.lockb
+/wasm
