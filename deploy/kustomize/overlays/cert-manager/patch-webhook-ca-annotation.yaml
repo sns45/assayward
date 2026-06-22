@@ -1,0 +1,9 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: assayward-webhook
+  annotations:
+    # cert-manager reads this annotation and automatically injects the CA bundle
+    # from the named Certificate resource into webhooks[*].clientConfig.caBundle
+    # whenever the certificate is renewed. Format: <namespace>/<certificate-name>.
+    cert-manager.io/inject-ca-from: assayward-system/assayward-webhook-tls

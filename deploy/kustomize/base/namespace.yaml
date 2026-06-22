@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: assayward-system
+  labels:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: assayward

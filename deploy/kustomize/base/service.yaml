@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: assayward-webhook
+  namespace: assayward-system
+  labels:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: assayward
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP

@@ -1,0 +1,11 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: assayward-selfsigned
+  namespace: assayward-system
+  labels:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: assayward
+spec:
+  selfSigned: {}

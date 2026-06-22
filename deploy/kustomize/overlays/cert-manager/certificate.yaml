@@ -1,0 +1,23 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: assayward-webhook-tls
+  namespace: assayward-system
+  labels:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: assayward
+spec:
+  # secretName must match the volume reference in the Deployment
+  # (deploy/kustomize/base/deployment.yaml: secretName: assayward-webhook-tls).
+  secretName: assayward-webhook-tls
+  duration: 8760h   # 1 year
+  renewBefore: 720h # 30 days
+  dnsNames:
+    # Primary service DNS — required for apiserver to reach the webhook.
+    - assayward-webhook.assayward-system.svc
+    # Full cluster-local name — included as an additional SAN.
+    - assayward-webhook.assayward-system.svc.cluster.local
+  issuerRef:
+    name: assayward-selfsigned
+    kind: Issuer

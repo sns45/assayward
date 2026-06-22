@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# All resources are scoped to the assayward-system namespace.
+namespace: assayward-system
+
+# Common labels applied to every resource produced by this base.
+commonLabels:
+  app.kubernetes.io/name: assayward-webhook
+  app.kubernetes.io/part-of: assayward
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - validatingwebhookconfiguration.yaml

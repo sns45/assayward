@@ -1,0 +1,51 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: assayward-webhook
+  labels:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: assayward
+  # caBundle is intentionally empty here.
+  # It must be injected by one of:
+  #   a) cert-manager: apply the overlays/cert-manager overlay; cert-manager
+  #      reads the cert-manager.io/inject-ca-from annotation and injects caBundle
+  #      automatically whenever the Certificate is renewed.
+  #   b) Manual: base64-encode your CA certificate and patch this field:
+  #      kubectl patch validatingwebhookconfiguration assayward-webhook \
+  #        --type=json \
+  #        -p='[{"op":"replace","path":"/webhooks/0/clientConfig/caBundle","value":"<base64-ca>"}]'
+webhooks:
+  - name: pods.assayward.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # AUDIT-FIRST: failurePolicy=Ignore means a webhook outage does NOT block
+    # pod scheduling. Flip to Fail only together with --mode=enforce after the
+    # audit phase confirms the policy is clean.
+    failurePolicy: Ignore
+    timeoutSeconds: 10
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    clientConfig:
+      service:
+        name: assayward-webhook
+        namespace: assayward-system
+        path: /validate
+        port: 443
+      # caBundle: "" — inject via cert-manager overlay or manual patch (see above).
+      caBundle: ""
+    # namespaceSelector excludes kube-system and assayward-system to prevent:
+    #   - bootstrap deadlocks when the webhook pods themselves start up.
+    #   - self-deny scenarios where the webhook rejects its own pod updates.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - assayward-system

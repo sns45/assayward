@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: assayward-webhook-config
+  namespace: assayward-system
+  labels:
+    app.kubernetes.io/name: assayward-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: assayward
+data:
+  # Built-in slsa-l3 policy embedded as the default.
+  # Operators who need a custom TrustPolicy should replace this data entry
+  # (e.g. `kubectl create configmap assayward-webhook-config --from-file=policy.yaml=my-policy.yaml
+  # --dry-run=client -o yaml | kubectl apply -f -`) and update the Deployment args
+  # to pass --policy-file=/config/policy.yaml instead of --policy=slsa-l3.
+  policy.yaml: |
+    apiVersion: assayward.dev/v1alpha1
+    kind: TrustPolicy
+    metadata:
+      name: slsa-l3
+    spec:
+      mode: enforce
+      signature:
+        required: true
+        keyless:
+          issuer: "https://token.actions.githubusercontent.com"
+          identityPattern: "https://github.com/sns45/*"
+        rekor:
+          required: true
+      slsa:
+        minLevel: 3
+        allowedBuilders:
+          - "https://github.com/sns45/*"
+      vex:
+        maxUnmitigatedSeverity: high
+      sbom: {}
+      identity:
+        required: true
+        trustDomain: "spiffe://sns45.dev"
+        idPattern: "spiffe://sns45.dev/ci/*"
