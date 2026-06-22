@@ -1,0 +1,14 @@
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+
+# Go build output
+/assayward
+/dist/
+*.wasm
+*.test
+*.out
+
+# Local env
+.env
