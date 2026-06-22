@@ -61,6 +61,10 @@ changelog:
       - "^test:"
       - "^ci:"
 
+# NOTE: `brews` is deprecated in goreleaser v2 but remains the only supported
+# mechanism for publishing a Homebrew formula (as opposed to a Cask). The
+# replacement `homebrew_casks` key targets Cask distribution, not formulas.
+# Migrate to the formula-specific key once goreleaser exposes one.
 brews:
   - name: assayward
     ids:
@@ -104,21 +108,25 @@ nfpms:
     section: utils
     priority: optional
 
-dockers:
+dockers_v2:
   # NOTE: Single-arch (linux/amd64) build for simplicity.
-  # Multi-arch (linux/arm64 via docker_manifests + buildx) is a future refinement.
-  - image_templates:
-      - "ghcr.io/sns45/assayward:{{ .Version }}"
-      - "ghcr.io/sns45/assayward:latest"
+  # Multi-arch (linux/arm64) is a future refinement via additional platforms entries
+  # combined with a docker_manifests block and buildx.
+  - id: assayward-docker
     ids:
       - assayward
-    goos: linux
-    goarch: amd64
     dockerfile: Dockerfile
-    build_flag_templates:
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source=https://github.com/sns45/assayward"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+    images:
+      - "ghcr.io/sns45/assayward"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+    labels:
+      org.opencontainers.image.created: "{{.Date}}"
+      org.opencontainers.image.title: "{{.ProjectName}}"
+      org.opencontainers.image.revision: "{{.FullCommit}}"
+      org.opencontainers.image.version: "{{.Version}}"
+      org.opencontainers.image.source: "https://github.com/sns45/assayward"
+      org.opencontainers.image.licenses: Apache-2.0
