@@ -74,11 +74,11 @@ jobs:
           OUT="$RUNNER_TEMP/fs-out"; mkdir -p "$OUT"
           forgeseal sbom --dir "$RUNNER_TEMP/forgeseal" --output "$OUT/sbom.cdx.json"
           forgeseal attest --subject "$OUT/sbom.cdx.json" --sign -o "$OUT/slsa.intoto.jsonl"
-          # forgeseal writes the keyed bundle next to the attestation + the CA in the cwd/output dir
+          # forgeseal writes the keyed bundle next to the attestation and the signing CA into $OUT.
           mv "$OUT/slsa.intoto.jsonl.sigstore.json" "$OUT/slsa.sigstore-bundle.json"
-          [ -f "$OUT/forgeseal-signing-ca.crt" ] || cp "$RUNNER_TEMP/forgeseal/forgeseal-signing-ca.crt" "$OUT/forgeseal-signing-ca.crt" 2>/dev/null || cp ./forgeseal-signing-ca.crt "$OUT/forgeseal-signing-ca.crt" 2>/dev/null || true
-          # find the CA wherever forgeseal wrote it
-          find "$RUNNER_TEMP" "$HOME/.forgeseal" -name 'forgeseal-signing-ca.crt' 2>/dev/null | head -1 | xargs -I{} cp {} "$OUT/forgeseal-signing-ca.crt"
+          # Ensure the CA is at $OUT (attest writes it there; fall back to `ca export`).
+          [ -f "$OUT/forgeseal-signing-ca.crt" ] || forgeseal ca export --output "$OUT/forgeseal-signing-ca.crt"
+          test -f "$OUT/forgeseal-signing-ca.crt"
           # clean VEX (vuln present but not_affected)
           forgeseal vex create --id "https://forgeseal.dev/vex/release" --author forgeseal --output "$OUT/vex.openvex.json"
           forgeseal vex add --vex "$OUT/vex.openvex.json" --cve CVE-2024-0001 --product "pkg:golang/x@1" --status not_affected --justification vulnerable_code_not_in_execute_path
