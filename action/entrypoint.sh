@@ -126,6 +126,11 @@ if [[ -n "${ASSAYWARD_FORGESEAL_OUTPUT:-}" ]]; then
   VERIFY_ARGS+=("--forgeseal-output" "${ASSAYWARD_FORGESEAL_OUTPUT}")
 fi
 
+# --signature-ca
+if [[ -n "${ASSAYWARD_SIGNATURE_CA:-}" ]]; then
+  VERIFY_ARGS+=("--signature-ca" "${ASSAYWARD_SIGNATURE_CA}")
+fi
+
 # --spiffe-bundle (one flag per non-empty line; each line is td=path)
 if [[ -n "${ASSAYWARD_SPIFFE_BUNDLE:-}" ]]; then
   while IFS= read -r line; do

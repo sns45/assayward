@@ -184,6 +184,31 @@ OUTPUT_6B="$(env \
 assert_contains "forgeseal-output flag in args" '--forgeseal-output /some/dir' "${OUTPUT_6B}"
 
 # ---------------------------------------------------------------------------
+# Test 6c: --signature-ca arg present when ASSAYWARD_SIGNATURE_CA set
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test 6c: signature-ca arg present when ASSAYWARD_SIGNATURE_CA set ==="
+OUTPUT_6C=""
+EXIT_6C=0
+OUTPUT_6C="$(env \
+  ASSAYWARD_BINARY_PATH="${ASSAYWARD_BIN}" \
+  ASSAYWARD_IMAGE="${TEST_IMAGE}" \
+  ASSAYWARD_SIGNATURE_CA="/some/ca.crt" \
+  ASSAYWARD_POLICY="baseline" \
+  ASSAYWARD_POLICY_FILE="" \
+  ASSAYWARD_BUNDLE="${BUNDLE_MULTILINE}" \
+  ASSAYWARD_FROM_OCI="false" \
+  ASSAYWARD_SIGSTORE_TRUST_ROOT="${TESTDATA}/signature/trusted-root-public-good.json" \
+  ASSAYWARD_SPIFFE_BUNDLE="" \
+  ASSAYWARD_SVID="" \
+  ASSAYWARD_VERSION="latest" \
+  RUNNER_OS="Linux" \
+  RUNNER_ARCH="X64" \
+  bash "${SCRIPT_DIR}/entrypoint.sh" 2>&1)" || EXIT_6C=$?
+
+assert_contains "signature-ca flag in args" '--signature-ca /some/ca.crt' "${OUTPUT_6C}"
+
+# ---------------------------------------------------------------------------
 # Test 7: --policy-file overrides --policy when set
 # ---------------------------------------------------------------------------
 echo ""
