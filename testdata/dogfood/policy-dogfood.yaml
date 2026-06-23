@@ -23,7 +23,8 @@ spec:
   slsa:
     minLevel: 3
     allowedBuilders:
-      - "https://forgeseal.dev/*"
+      - "https://forgeseal.dev/*"          # local forgeseal CLI builder
+      - "https://github.com/sns45/*"        # forgeseal running in sns45 GitHub Actions (CI builder id)
   vex:
     maxUnmitigatedSeverity: high
   sbom:
