@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/sns45/assayward/internal/testfix"
@@ -154,20 +155,67 @@ func TestSigstore_TamperedSignature_CryptoReject(t *testing.T) {
 	t.Logf("crypto-tamper rejection error: %q", result.Err)
 }
 
-func TestSigstoreVerifier_NoTrustMaterial(t *testing.T) {
+// TestSigstoreVerifier_TUFFallback_AttemptsMade verifies that when SigstoreTUF
+// is empty, the verifier attempts TUF-based trust root resolution rather than
+// immediately returning "no trust material". In environments with network access
+// the verification may succeed; in offline environments it will fail with a TUF
+// or verification error. In either case the result must NOT report the static
+// "no trust material" error.
+func TestSigstoreVerifier_TUFFallback_AttemptsMade(t *testing.T) {
 	bundleBytes := testfix.Load(t, "signature/bundle-provenance.json")
 
 	v := verify.NewSignatureVerifier()
 	att := core.Attestation{Envelope: bundleBytes}
 	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
-	roots := core.TrustRoots{} // empty SigstoreTUF
+	roots := core.TrustRoots{} // empty SigstoreTUF — triggers TUF fallback
 
 	result := v.Verify(att, img, roots)
 
-	if result.Verified {
-		t.Fatal("expected Verified=false for empty trust material, got true")
+	// The verifier must NOT return the old "no trust material" fast-fail error.
+	// It must attempt TUF resolution first (and either succeed or fail with a
+	// TUF/network/verification error).
+	if result.Err == "no trust material" {
+		t.Fatal("verifier returned immediate 'no trust material' error; expected TUF fallback to be attempted")
 	}
-	if result.Err != "no trust material" {
-		t.Errorf("expected Err=%q, got %q", "no trust material", result.Err)
+	// Sanity: Available must be true (native verifier ran).
+	if !result.Available {
+		t.Error("expected Available=true from native verifier")
 	}
+	t.Logf("TUF fallback result: Verified=%v Err=%q", result.Verified, result.Err)
+}
+
+// TestSigstoreVerifier_TUFFallback_PublicGood verifies end-to-end keyless
+// verification against the Sigstore public-good instance by fetching the trusted
+// root via TUF at runtime (no pre-committed SigstoreTUF bytes).
+//
+// This test hits the public TUF repository and Rekor log. It is gated behind
+// ASSAYWARD_TEST_NETWORK=1 to avoid flakiness in offline CI environments.
+func TestSigstoreVerifier_TUFFallback_PublicGood(t *testing.T) {
+	if os.Getenv("ASSAYWARD_TEST_NETWORK") != "1" {
+		t.Skip("skipping network test: set ASSAYWARD_TEST_NETWORK=1 to run")
+	}
+
+	bundleBytes := testfix.Load(t, "signature/bundle-provenance.json")
+
+	v := verify.NewSignatureVerifier()
+	att := core.Attestation{Envelope: bundleBytes}
+	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
+	// Empty SigstoreTUF: the verifier must fetch the trusted root from TUF.
+	roots := core.TrustRoots{}
+
+	result := v.Verify(att, img, roots)
+
+	if !result.Verified {
+		t.Fatalf("expected Verified=true with public-good TUF fallback, got false; Err=%q", result.Err)
+	}
+	if !result.RekorLogged {
+		t.Error("expected RekorLogged=true for public-good keyless bundle")
+	}
+	if result.Issuer == "" {
+		t.Error("expected non-empty Issuer")
+	}
+	if result.SubjectIdentity == "" {
+		t.Error("expected non-empty SubjectIdentity")
+	}
+	t.Logf("TUF fallback: Issuer=%q SubjectIdentity=%q", result.Issuer, result.SubjectIdentity)
 }

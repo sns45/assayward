@@ -4,13 +4,35 @@ package verify
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"
+	"github.com/sigstore/sigstore-go/pkg/tuf"
 	sgverify "github.com/sigstore/sigstore-go/pkg/verify"
 
 	core "github.com/sns45/assayward/pkg/core"
 )
+
+// publicGoodTrustedRoot caches the public-good Sigstore trusted root fetched
+// via TUF so that repeated verifications within a single process do not each
+// incur a TUF round-trip. The cache is process-scoped and best-effort: if a
+// concurrent fetch is in progress, callers will serialise on mu.
+var (
+	publicGoodOnce    sync.Once
+	publicGoodRoot    *root.TrustedRoot
+	publicGoodRootErr error
+)
+
+// fetchPublicGoodRoot returns the public-good Sigstore trusted root, fetching
+// it from the public TUF repository on first call and caching the result for
+// the lifetime of the process.
+func fetchPublicGoodRoot() (*root.TrustedRoot, error) {
+	publicGoodOnce.Do(func() {
+		publicGoodRoot, publicGoodRootErr = root.FetchTrustedRootWithOptions(tuf.DefaultOptions())
+	})
+	return publicGoodRoot, publicGoodRootErr
+}
 
 // nativeVerifier is the production Sigstore verifier. It requires tlog
 // inclusion (Rekor) and certificate chain to Fulcio but is policy-agnostic
@@ -26,11 +48,12 @@ func NewSignatureVerifier() SignatureVerifier {
 
 // Verify checks a Sigstore bundle for the given attestation. The
 // implementation:
-//  0. First attempts keyed (self-signed-CA) verification via verifyKeyedBundle.
-//     If the bundle carries a certificate and roots.SignatureCAs is set, the
-//     keyed verifier handles it (stdlib crypto only) and the result is returned
-//     immediately without touching sigstore-go.
-//  1. Parses the trusted root from roots.SigstoreTUF.
+//  0. First attempts keyed (self-signed-CA) verification via VerifyKeyedBundle.
+//     If the bundle carries a certificate WITHOUT tlogEntries and roots.SignatureCAs
+//     is set, the keyed verifier handles it (stdlib crypto only) and the result is
+//     returned immediately without touching sigstore-go.
+//  1. Resolves the trusted root: uses roots.SigstoreTUF when provided; otherwise
+//     fetches the Sigstore public-good trusted root via TUF (cached per-process).
 //  2. Parses the Sigstore bundle from att.Envelope.
 //  3. Verifies the bundle: tlog inclusion + cert chain (Fulcio).
 //  4. Extracts OIDC issuer and SAN from the verified leaf certificate.
@@ -39,18 +62,26 @@ func NewSignatureVerifier() SignatureVerifier {
 // signed; that enforcement belongs to the policy layer.
 func (v *nativeVerifier) Verify(att core.Attestation, img core.ImageRef, roots core.TrustRoots) SignatureResult {
 	// Try keyed (self-signed-CA) verification first. If handled, return immediately.
+	// VerifyKeyedBundle returns handled=false for keyless bundles (tlogEntries present).
 	if result, handled := VerifyKeyedBundle(att, img, roots); handled {
 		return result
 	}
 
-	if len(roots.SigstoreTUF) == 0 {
-		return SignatureResult{Available: true, Verified: false, Err: "no trust material"}
-	}
-
-	// Parse trusted root from injected JSON bytes.
-	trustedRoot, err := root.NewTrustedRootFromJSON(roots.SigstoreTUF)
-	if err != nil {
-		return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("parse trusted root: %v", err)}
+	// Resolve trusted root: prefer injected SigstoreTUF JSON; fall back to the
+	// public-good TUF root fetched at runtime (cached per-process).
+	var trustedRoot *root.TrustedRoot
+	var err error
+	if len(roots.SigstoreTUF) > 0 {
+		trustedRoot, err = root.NewTrustedRootFromJSON(roots.SigstoreTUF)
+		if err != nil {
+			return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("parse trusted root: %v", err)}
+		}
+	} else {
+		// No injected root: fetch the public-good trusted root via TUF.
+		trustedRoot, err = fetchPublicGoodRoot()
+		if err != nil {
+			return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("fetch public-good TUF root: %v", err)}
+		}
 	}
 
 	// Parse the Sigstore bundle from att.Envelope bytes.

@@ -1,0 +1,31 @@
+apiVersion: assayward.dev/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: forgeseal-dogfood-keyless
+  version: v0.1.0
+spec:
+  mode: enforce
+  signature:
+    # Keyless signature verification via Sigstore public-good instance.
+    # The signing certificate is issued by Fulcio (GitHub Actions OIDC issuer),
+    # and a Rekor transparency-log entry is required (tlogEntries present in bundle).
+    # The SAN workflow identity must match the sns45 GitHub Actions pattern.
+    required: true
+    keyless:
+      issuer: "https://token.actions.githubusercontent.com"
+      identityPattern: "https://github.com/sns45/*"
+    rekor:
+      required: true
+  slsa:
+    minLevel: 3
+    allowedBuilders:
+      - "https://forgeseal.dev/*"          # local forgeseal CLI builder
+      - "https://github.com/sns45/*"        # forgeseal running in sns45 GitHub Actions (CI builder id)
+  vex:
+    maxUnmitigatedSeverity: high
+  sbom:
+    required: true
+  identity:
+    required: true
+    trustDomain: "spiffe://ci.svidmint.dev"
+    idPattern: "spiffe://ci.svidmint.dev/github-actions/*"

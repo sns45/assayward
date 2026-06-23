@@ -191,3 +191,103 @@ func TestKeyedBundle_NoSignatureCAs(t *testing.T) {
 		t.Fatal("expected handled=false when SignatureCAs is empty")
 	}
 }
+
+// TestKeyedBundle_SkipsKeylessBundle_WithTlogEntries verifies that a bundle
+// containing tlogEntries (a keyless/Fulcio+Rekor bundle) causes VerifyKeyedBundle
+// to return handled=false so the caller falls through to the sigstore-go keyless path.
+// A keyed forgeseal bundle has verificationMaterial.certificate and NO tlogEntries.
+func TestKeyedBundle_SkipsKeylessBundle_WithTlogEntries(t *testing.T) {
+	// Construct a minimal keyless-shaped bundle: it has verificationMaterial.certificate
+	// (a Fulcio leaf) AND tlogEntries (a Rekor inclusion). The keyed verifier must
+	// recognise the tlogEntries and return handled=false rather than claiming the bundle.
+	keylessBundleJSON := []byte(`{
+		"mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.2",
+		"verificationMaterial": {
+			"certificate": {
+				"rawBytes": "MIIB2zCCAYCgAwIBAgIQCj6UAl3ZTUGyF7nQ34laPDAKBggqhkjOPQQDAjAzMRIwEAYDVQQKEwlGb3JnZXNlYWwxHTAbBgNVBAMTFEZvcmdlc2VhbCBTaWduaW5nIENBMAoGCCqGSM49BAMCAwoG"
+			},
+			"tlogEntries": [
+				{
+					"logIndex": "12345",
+					"logId": {"keyId": "wNI9atQGlz+VWfO6LRygH4QUfY/8W4RFwiT5i5WRgB0="},
+					"kindVersion": {"kind": "intoto", "version": "0.0.2"},
+					"integratedTime": "1681839912",
+					"inclusionPromise": {"signedEntryTimestamp": "MEYCIQCQxXRPzxtA3rie/Gg8vErjJNfGRBwWtfyJZWekPepLIwIhAKCP6p9llDiaqkuOzjlGNfqWqHESGEiAGvS7RSNc6mLr"},
+					"canonicalizedBody": "eyJhcGlWZXJzaW9uIjoiMC4wLjIifQ=="
+				}
+			]
+		},
+		"content": {
+			"dsseEnvelope": {
+				"payloadType": "application/vnd.in-toto+json",
+				"payload": "e30=",
+				"signatures": [{"sig": "MEQCIBxxx"}]
+			}
+		}
+	}`)
+
+	att := core.Attestation{
+		PredicateType: "https://slsa.dev/provenance/v1",
+		Envelope:      keylessBundleJSON,
+	}
+	img := core.ImageRef{Name: "test-image", Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+
+	// With SignatureCAs set: the old code would claim this bundle (certificate present +
+	// SignatureCAs set = handled=true). The new code must detect tlogEntries and return
+	// handled=false so the keyless path can handle it instead.
+	_, caBytes := loadKeyedTestFixtures(t)
+	roots := core.TrustRoots{SignatureCAs: caBytes}
+
+	_, handled := verify.VerifyKeyedBundle(att, img, roots)
+
+	if handled {
+		t.Fatal("VerifyKeyedBundle must return handled=false for a bundle with tlogEntries (keyless bundle); keyed verifier must not claim keyless bundles")
+	}
+}
+
+// TestKeyedBundle_SkipsKeylessBundle_WithX509CertChain verifies that a bundle
+// containing x509CertificateChain (multi-cert Fulcio chain) causes VerifyKeyedBundle
+// to return handled=false. Keyed forgeseal bundles carry a single
+// verificationMaterial.certificate, not an x509CertificateChain.
+func TestKeyedBundle_SkipsKeylessBundle_WithX509CertChain(t *testing.T) {
+	keylessBundleJSON := []byte(`{
+		"mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
+		"verificationMaterial": {
+			"x509CertificateChain": {
+				"certificates": [
+					{"rawBytes": "MIIB2zCCAYCgAwIBAgIQCj6UAl3ZTUGyF7nQ34laPDAKBggqhkjOPQQDAg=="}
+				]
+			},
+			"tlogEntries": [
+				{
+					"logIndex": "18300934",
+					"logId": {"keyId": "wNI9atQGlz+VWfO6LRygH4QUfY/8W4RFwiT5i5WRgB0="},
+					"kindVersion": {"kind": "intoto", "version": "0.0.2"},
+					"integratedTime": "1681839912",
+					"inclusionPromise": {"signedEntryTimestamp": "MEYCIQCQxXRPzxtA3rie/Gg8vErjJNfGRBwWtfyJZWekPepLIwIhAKCP6p9llDiaqkuOzjlGNfqWqHESGEiAGvS7RSNc6mLr"},
+					"canonicalizedBody": "eyJhcGlWZXJzaW9uIjoiMC4wLjIifQ=="
+				}
+			]
+		},
+		"dsseEnvelope": {
+			"payloadType": "application/vnd.in-toto+json",
+			"payload": "e30=",
+			"signatures": [{"sig": "MEQ="}]
+		}
+	}`)
+
+	att := core.Attestation{
+		PredicateType: "https://slsa.dev/provenance/v1",
+		Envelope:      keylessBundleJSON,
+	}
+	img := core.ImageRef{Name: "test-image", Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+
+	_, caBytes := loadKeyedTestFixtures(t)
+	roots := core.TrustRoots{SignatureCAs: caBytes}
+
+	_, handled := verify.VerifyKeyedBundle(att, img, roots)
+
+	if handled {
+		t.Fatal("VerifyKeyedBundle must return handled=false for a bundle with x509CertificateChain+tlogEntries (keyless bundle)")
+	}
+}

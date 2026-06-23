@@ -23,6 +23,10 @@ type keyedBundle struct {
 		Certificate *struct {
 			RawBytes string `json:"rawBytes"`
 		} `json:"certificate"`
+		// TlogEntries is non-nil and non-empty on KEYLESS (Fulcio+Rekor) bundles.
+		// A keyed forgeseal bundle has no tlogEntries; if present we must not claim
+		// the bundle and should fall through to the sigstore-go keyless path.
+		TlogEntries []json.RawMessage `json:"tlogEntries"`
 	} `json:"verificationMaterial"`
 	Content struct {
 		DSSEEnvelope *struct {
@@ -58,6 +62,14 @@ func VerifyKeyedBundle(att core.Attestation, _ core.ImageRef, roots core.TrustRo
 
 	// No certificate material present: not a keyed bundle.
 	if b.VerificationMaterial.Certificate == nil || b.VerificationMaterial.Certificate.RawBytes == "" {
+		return SignatureResult{}, false
+	}
+
+	// tlogEntries present: this is a KEYLESS (Fulcio+Rekor) bundle. A keyed forgeseal
+	// bundle has verificationMaterial.certificate and NO tlogEntries. The Fulcio leaf
+	// cert does not chain to a self-signed SignatureCAs entry, so we must not claim
+	// this bundle. Fall through to the sigstore-go keyless path.
+	if len(b.VerificationMaterial.TlogEntries) > 0 {
 		return SignatureResult{}, false
 	}
 
