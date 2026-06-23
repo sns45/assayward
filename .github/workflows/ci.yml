@@ -49,20 +49,26 @@ jobs:
         run: bash action/entrypoint_test.sh
 
   deploy:
-    name: deploy (helm lint + kustomize dry-run)
+    name: deploy (helm lint + kustomize render + kubeconform)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - uses: azure/setup-kubectl@v4
-      - name: helm lint + template + client dry-run
+      - name: install kubeconform (offline schema validation, no cluster)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: helm lint + template + schema-validate
         run: |
           helm lint deploy/helm/assayward-webhook
-          helm template aw deploy/helm/assayward-webhook -n assayward-system | kubectl apply --dry-run=client --validate=false -f -
+          helm template aw deploy/helm/assayward-webhook -n assayward-system \
+            | kubeconform -strict -summary -ignore-missing-schemas
           helm template aw deploy/helm/assayward-webhook -n assayward-system --set tls.mode=certManager >/dev/null
-      - name: kustomize base + overlay
+      - name: kustomize render + schema-validate
         run: |
-          kubectl kustomize deploy/kustomize/base | kubectl apply --dry-run=client --validate=false -f -
+          kubectl kustomize deploy/kustomize/base \
+            | kubeconform -strict -summary -ignore-missing-schemas
           kubectl kustomize deploy/kustomize/overlays/cert-manager >/dev/null
 
   js:
