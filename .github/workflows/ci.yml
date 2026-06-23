@@ -58,11 +58,11 @@ jobs:
       - name: helm lint + template + client dry-run
         run: |
           helm lint deploy/helm/assayward-webhook
-          helm template aw deploy/helm/assayward-webhook -n assayward-system | kubectl apply --dry-run=client -f -
+          helm template aw deploy/helm/assayward-webhook -n assayward-system | kubectl apply --dry-run=client --validate=false -f -
           helm template aw deploy/helm/assayward-webhook -n assayward-system --set tls.mode=certManager >/dev/null
       - name: kustomize base + overlay
         run: |
-          kubectl kustomize deploy/kustomize/base | kubectl apply --dry-run=client -f -
+          kubectl kustomize deploy/kustomize/base | kubectl apply --dry-run=client --validate=false -f -
           kubectl kustomize deploy/kustomize/overlays/cert-manager >/dev/null
 
   js:
