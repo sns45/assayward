@@ -13,6 +13,7 @@ const (
 	ExitAllow = 0 // decision: allow or audit (non-blocking)
 	ExitDeny  = 1 // decision: deny
 	ExitError = 2 // non-usage operational failure
+	ExitUsage = 2 // usage / flag error (same code as ExitError per spec)
 )
 
 // CLIError is a non-usage failure that carries a specific exit code.

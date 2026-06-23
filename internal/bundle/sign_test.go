@@ -5,9 +5,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/registry"
@@ -232,5 +234,261 @@ func TestResolveDigest_SignVerify_EndToEnd(t *testing.T) {
 	tamperedDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	if err := bundle.PullAndVerifyReferrer(ctx, tamperedDigest, ref, pub, pullOpts); err == nil {
 		t.Error("PullAndVerifyReferrer() tampered digest returned nil, want error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RED: keyed-CA (SignWithCA / VerifyWithCA) tests — these test the new
+// Sigstore-style bundle signing path. They fail until the implementation
+// is added to sign.go.
+// ---------------------------------------------------------------------------
+
+// generateTestCA creates a self-signed CA key pair for test use.
+// Returns (caKey, caCert DER bytes).
+func generateTestCA(t *testing.T) (*ecdsa.PrivateKey, []byte) {
+	t.Helper()
+	ca, caDER, err := bundle.GenerateSelfSignedCA()
+	if err != nil {
+		t.Fatalf("GenerateSelfSignedCA: %v", err)
+	}
+	return ca, caDER
+}
+
+// TestSignWithCA_RoundTrip generates a self-signed CA, signs a manifest digest,
+// and verifies the CA-keyed signature succeeds.
+func TestSignWithCA_RoundTrip(t *testing.T) {
+	caKey, caDER := generateTestCA(t)
+
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+
+	manifestDigest := "sha256:aabbccdd00000000000000000000000000000000000000000000000000000000"
+
+	sigBytes, leafDER, err := bundle.SignWithCA(manifestDigest, caKey, caCert)
+	if err != nil {
+		t.Fatalf("SignWithCA: %v", err)
+	}
+	if len(sigBytes) == 0 {
+		t.Fatal("SignWithCA returned empty sig")
+	}
+	if len(leafDER) == 0 {
+		t.Fatal("SignWithCA returned empty leaf cert DER")
+	}
+
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	if err := bundle.VerifyWithCA(manifestDigest, sigBytes, leafDER, pool); err != nil {
+		t.Errorf("VerifyWithCA valid: %v", err)
+	}
+}
+
+// TestSignWithCA_TamperedDigest verifies that a tampered manifest digest fails CA verification.
+func TestSignWithCA_TamperedDigest(t *testing.T) {
+	caKey, caDER := generateTestCA(t)
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	original := "sha256:aabbccdd00000000000000000000000000000000000000000000000000000000"
+	tampered := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	sigBytes, leafDER, err := bundle.SignWithCA(original, caKey, caCert)
+	if err != nil {
+		t.Fatalf("SignWithCA: %v", err)
+	}
+
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	if err := bundle.VerifyWithCA(tampered, sigBytes, leafDER, pool); err == nil {
+		t.Error("VerifyWithCA with tampered digest returned nil, want error")
+	}
+}
+
+// TestSignWithCA_WrongCA verifies that a leaf cert from a different CA fails chain verification.
+func TestSignWithCA_WrongCA(t *testing.T) {
+	caKey, caDER := generateTestCA(t)
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	_, wrongCaDER := generateTestCA(t)
+	wrongCaCert, _ := x509.ParseCertificate(wrongCaDER)
+
+	manifestDigest := "sha256:aabbccdd00000000000000000000000000000000000000000000000000000000"
+
+	sigBytes, leafDER, err := bundle.SignWithCA(manifestDigest, caKey, caCert)
+	if err != nil {
+		t.Fatalf("SignWithCA: %v", err)
+	}
+
+	wrongPool := x509.NewCertPool()
+	wrongPool.AddCert(wrongCaCert)
+
+	if err := bundle.VerifyWithCA(manifestDigest, sigBytes, leafDER, wrongPool); err == nil {
+		t.Error("VerifyWithCA with wrong CA returned nil, want error")
+	}
+}
+
+// TestSignWithCA_MissingSignature verifies that VerifyWithCA with empty sig bytes fails.
+func TestSignWithCA_MissingSignature(t *testing.T) {
+	_, caDER := generateTestCA(t)
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	manifestDigest := "sha256:aabbccdd00000000000000000000000000000000000000000000000000000000"
+
+	// A valid leaf cert but empty sig bytes.
+	caKey2, caDER2 := generateTestCA(t)
+	caCert2, _ := x509.ParseCertificate(caDER2)
+	_, leafDER, _ := bundle.SignWithCA(manifestDigest, caKey2, caCert2)
+
+	if err := bundle.VerifyWithCA(manifestDigest, []byte{}, leafDER, pool); err == nil {
+		t.Error("VerifyWithCA with empty sig returned nil, want error")
+	}
+}
+
+// TestCASignAndPushReferrer_RoundTrip performs a full registry end-to-end test
+// with keyed-CA signing:
+//  1. Pack + push a bundle.
+//  2. SignWithCAAndPushReferrer with a self-signed CA.
+//  3. PullAndVerifyWithCAReferrer against the same CA pool.
+func TestCASignAndPushReferrer_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	caKey, caDER := generateTestCA(t)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	srv, transport := newSignTestRegistry(t)
+	host := srv.Listener.Addr().String()
+
+	policies := map[string][]byte{"baseline": builtin.Baseline}
+	meta := bundle.Meta{BundleName: "ca-sig-test", Version: "v0.0.1"}
+
+	store, manifestDesc, err := bundle.Pack(ctx, policies, meta)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+
+	ref := fmt.Sprintf("%s/casigtest:v0.0.1", host)
+	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
+	if _, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest: %v", err)
+	}
+
+	if err := bundle.SignWithCAAndPushReferrer(ctx, resolvedDesc, ref, caKey, caCert, pushOpts); err != nil {
+		t.Fatalf("SignWithCAAndPushReferrer: %v", err)
+	}
+
+	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
+	if err := bundle.PullAndVerifyWithCAReferrer(ctx, resolvedDesc.Digest.String(), ref, pool, pullOpts); err != nil {
+		t.Fatalf("PullAndVerifyWithCAReferrer valid CA: %v", err)
+	}
+}
+
+// TestCASignAndPushReferrer_WrongCA verifies that verification against the wrong CA fails.
+func TestCASignAndPushReferrer_WrongCA(t *testing.T) {
+	ctx := context.Background()
+
+	caKey, caDER := generateTestCA(t)
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	_, wrongCaDER := generateTestCA(t)
+	wrongCaCert, _ := x509.ParseCertificate(wrongCaDER)
+	wrongPool := x509.NewCertPool()
+	wrongPool.AddCert(wrongCaCert)
+
+	srv, transport := newSignTestRegistry(t)
+	host := srv.Listener.Addr().String()
+
+	policies := map[string][]byte{"baseline": builtin.Baseline}
+	meta := bundle.Meta{BundleName: "ca-wrongca-test", Version: "v0.0.1"}
+
+	store, manifestDesc, err := bundle.Pack(ctx, policies, meta)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+
+	ref := fmt.Sprintf("%s/cawrongca:v0.0.1", host)
+	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
+	if _, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest: %v", err)
+	}
+
+	if err := bundle.SignWithCAAndPushReferrer(ctx, resolvedDesc, ref, caKey, caCert, pushOpts); err != nil {
+		t.Fatalf("SignWithCAAndPushReferrer: %v", err)
+	}
+
+	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
+	if err := bundle.PullAndVerifyWithCAReferrer(ctx, resolvedDesc.Digest.String(), ref, wrongPool, pullOpts); err == nil {
+		t.Error("PullAndVerifyWithCAReferrer with wrong CA returned nil, want error")
+	}
+}
+
+// TestCASignAndPushReferrer_MissingSignature verifies that pulling when no
+// CA-keyed signature referrer exists returns an error.
+func TestCASignAndPushReferrer_MissingSignature(t *testing.T) {
+	ctx := context.Background()
+
+	_, caDER := generateTestCA(t)
+	caCert, _ := x509.ParseCertificate(caDER)
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	srv, transport := newSignTestRegistry(t)
+	host := srv.Listener.Addr().String()
+
+	policies := map[string][]byte{"baseline": builtin.Baseline}
+	meta := bundle.Meta{BundleName: "ca-nosig-test", Version: "v0.0.1"}
+
+	store, manifestDesc, err := bundle.Pack(ctx, policies, meta)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+
+	ref := fmt.Sprintf("%s/canosig:v0.0.1", host)
+	pushOpts := bundle.PushOptions{PlainHTTP: true, Transport: transport}
+	if _, err := bundle.Push(ctx, store, manifestDesc, ref, pushOpts); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	resolvedDesc, err := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{PlainHTTP: true, Transport: transport})
+	if err != nil {
+		t.Fatalf("ResolveDigest: %v", err)
+	}
+
+	pullOpts := bundle.PullOptions{PlainHTTP: true, Transport: transport}
+	// No signature pushed: should fail with "no signature referrer found".
+	if err := bundle.PullAndVerifyWithCAReferrer(ctx, resolvedDesc.Digest.String(), ref, pool, pullOpts); err == nil {
+		t.Error("PullAndVerifyWithCAReferrer without a signature returned nil, want error")
+	}
+}
+
+// TestKeylessSigning_RequiresOIDC verifies that the keyless signing path
+// returns a clear "OIDC required" error when called outside CI (offline).
+// This test is safe to run anywhere: it must NOT attempt network I/O.
+func TestKeylessSigning_RequiresOIDC(t *testing.T) {
+	err := bundle.SignKeyless("sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	if err == nil {
+		t.Fatal("SignKeyless() returned nil offline, want OIDC-required error")
+	}
+	if !strings.Contains(err.Error(), "OIDC") && !strings.Contains(err.Error(), "keyless") {
+		t.Errorf("SignKeyless() offline error %q does not mention OIDC or keyless", err.Error())
 	}
 }

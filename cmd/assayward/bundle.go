@@ -169,19 +169,27 @@ func registerBundlePullCmd(parent *cobra.Command, stdout io.Writer, transport ht
 	parent.AddCommand(cmd)
 }
 
-// registerBundleSignCmd registers "bundle sign <ref> --key <ecdsa-key-file>".
+// registerBundleSignCmd registers "bundle sign <ref>".
 //
-// Production signing note:
-// In production (M6), replace --key with --sigstore (keyless Sigstore via
-// cosign Fulcio + Rekor), verified by forgeseal (the trilogy loop, §6.6).
-// The referrer/subject OCI wiring here is identical to the cosign pattern,
-// so the swap is mechanical.
+// Signing modes (pick one):
 //
-// TODO(M6): add --sigstore flag for keyless cosign signing + forgeseal verify.
+//   - Keyed-CA (default, offline-verifiable): --ca-key <k> --ca-cert <c>
+//     Signs with a leaf cert issued by the provided CA. The leaf cert (DER)
+//     is carried in the signature referrer so verifiers can check the chain.
+//
+//   - Keyless CI: --keyless
+//     Uses Sigstore Fulcio + Rekor (OIDC token required from CI). Returns a
+//     clear "OIDC required" error when invoked offline.
+//
+//   - Legacy bare-key (back-compat): --key <ecdsa-private-key.pem>
+//     Original M5 keyed-proxy path. Still functional; keyed-CA is preferred.
 func registerBundleSignCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
 	var (
-		keyFile   string
-		plainHTTP bool
+		keyFile    string
+		caKeyFile  string
+		caCertFile string
+		keyless    bool
+		plainHTTP  bool
 	)
 
 	cmd := &cobra.Command{
@@ -190,24 +198,44 @@ func registerBundleSignCmd(parent *cobra.Command, stdout io.Writer, transport ht
 		Long: `sign computes an ECDSA signature of the bundle manifest digest and pushes
 it as an OCI referrer artifact (subject = the bundle manifest).
 
-v0.1 uses a keyed ECDSA proxy (offline, hermetic). Production (M6) will use
-cosign keyless signing (Fulcio + Rekor) verified by forgeseal.
+Signing modes (mutually exclusive):
 
-TODO(M6): add --sigstore flag for Sigstore keyless signing + forgeseal verify.`,
+  --ca-key <key.pem> --ca-cert <ca.pem>  (keyed-CA, default)
+      Self-signed or external CA issues a leaf cert (URI SAN = signer identity,
+      ExtKeyUsage CodeSigning). The leaf cert is stored in the referrer so
+      verifiers can check the chain without trusting just a bare public key.
+      Offline-verifiable: no network access required beyond the registry.
+
+  --keyless
+      Sigstore keyless path: Fulcio issues a short-lived cert backed by OIDC,
+      and the signature is logged to Rekor. Requires CI (OIDC token). Returns a
+      clear "OIDC required" error when invoked offline.
+
+  --key <key.pem>
+      Legacy bare-key ECDSA path (M5 back-compat). Still functional; keyed-CA
+      is the recommended path going forward.`,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
 			ctx := context.Background()
 
-			priv, err := loadECPrivateKey(keyFile)
-			if err != nil {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: load key %q: %v", keyFile, err)}
+			// Count how many signing modes are active.
+			modeCount := 0
+			if keyless {
+				modeCount++
+			}
+			if caKeyFile != "" || caCertFile != "" {
+				modeCount++
+			}
+			if keyFile != "" {
+				modeCount++
+			}
+			if modeCount > 1 {
+				return &CLIError{Code: ExitUsage, Msg: "bundle sign: --keyless, --ca-key/--ca-cert, and --key are mutually exclusive"}
 			}
 
 			// Resolve the manifest descriptor directly from the registry.
-			// This binds the signature to the actual stored manifest digest
-			// without repacking locally.
 			subjectDesc, resolveErr := bundle.ResolveDigest(ctx, ref, bundle.PullOptions{
 				PlainHTTP: plainHTTP,
 				Transport: transport,
@@ -216,11 +244,46 @@ TODO(M6): add --sigstore flag for Sigstore keyless signing + forgeseal verify.`,
 				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: resolve manifest at %q: %v", ref, resolveErr)}
 			}
 
-			if err := bundle.SignAndPushReferrer(ctx, subjectDesc, ref, priv, bundle.PushOptions{
-				PlainHTTP: plainHTTP,
-				Transport: transport,
-			}); err != nil {
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: %v", err)}
+			switch {
+			case keyless:
+				if err := bundle.SignKeyless(subjectDesc.Digest.String()); err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign --keyless: %v", err)}
+				}
+
+			case caKeyFile != "" || caCertFile != "":
+				if caKeyFile == "" || caCertFile == "" {
+					return &CLIError{Code: ExitUsage, Msg: "bundle sign: --ca-key and --ca-cert must both be provided"}
+				}
+				caKey, err := loadECPrivateKey(caKeyFile)
+				if err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: load CA key %q: %v", caKeyFile, err)}
+				}
+				caCert, err := loadCACert(caCertFile)
+				if err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: load CA cert %q: %v", caCertFile, err)}
+				}
+				if err := bundle.SignWithCAAndPushReferrer(ctx, subjectDesc, ref, caKey, caCert, bundle.PushOptions{
+					PlainHTTP: plainHTTP,
+					Transport: transport,
+				}); err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: %v", err)}
+				}
+
+			default:
+				// Legacy bare-key path.
+				if keyFile == "" {
+					return &CLIError{Code: ExitUsage, Msg: "bundle sign: one of --ca-key/--ca-cert, --keyless, or --key is required"}
+				}
+				priv, err := loadECPrivateKey(keyFile)
+				if err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: load key %q: %v", keyFile, err)}
+				}
+				if err := bundle.SignAndPushReferrer(ctx, subjectDesc, ref, priv, bundle.PushOptions{
+					PlainHTTP: plainHTTP,
+					Transport: transport,
+				}); err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle sign: %v", err)}
+				}
 			}
 
 			fmt.Fprintf(stdout, "signed %s\ndigest: %s\n", ref, subjectDesc.Digest.String())
@@ -228,48 +291,57 @@ TODO(M6): add --sigstore flag for Sigstore keyless signing + forgeseal verify.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&keyFile, "key", "", "path to ECDSA private key PEM file (required)")
-	_ = cmd.MarkFlagRequired("key")
+	cmd.Flags().StringVar(&caKeyFile, "ca-key", "", "path to CA ECDSA private key PEM file (keyed-CA mode)")
+	cmd.Flags().StringVar(&caCertFile, "ca-cert", "", "path to CA certificate PEM file (keyed-CA mode)")
+	cmd.Flags().BoolVar(&keyless, "keyless", false, "use Sigstore keyless signing via Fulcio + Rekor (requires CI/OIDC)")
+	cmd.Flags().StringVar(&keyFile, "key", "", "path to ECDSA private key PEM file (legacy bare-key mode)")
 	cmd.Flags().BoolVar(&plainHTTP, "plain-http", false, "use HTTP instead of HTTPS")
 
 	parent.AddCommand(cmd)
 }
 
-// registerBundleVerifyCmd registers "bundle verify <ref> --key <pubkey-file>".
+// registerBundleVerifyCmd registers "bundle verify <ref>".
 //
 // Exit codes: 0 valid, 1 invalid/missing, 2 usage error.
 //
-// Production: --sigstore flag (keyless, verified by forgeseal).
-// TODO(M6): wire --sigstore flag for forgeseal verification.
+// Verification modes (mutually exclusive):
+//   - --ca-cert <ca.pem>  keyed-CA verification (default, offline-verifiable)
+//   - --key <pub.pem>     legacy bare-key verification (back-compat)
 func registerBundleVerifyCmd(parent *cobra.Command, stdout io.Writer, transport http.RoundTripper) {
 	var (
 		pubKeyFile string
+		caCertFile string
 		plainHTTP  bool
-		// TODO(M6): add --sigstore bool flag for Sigstore keyless + forgeseal.
 	)
 
 	cmd := &cobra.Command{
 		Use:   "verify <ref>",
 		Short: "Verify a policy bundle signature at <ref>",
 		Long: `verify pulls the signature referrer for the bundle at <ref> and checks
-it against the provided public key.
+the signature chain.
 
 Exit codes: 0 = valid, 1 = invalid or no signature, 2 = usage/input error.
 
-v0.1 uses ECDSA keyed verification (offline proxy). Production (M6) uses
-cosign keyless (Sigstore) verified by forgeseal (§6.6 trilogy loop).
+Verification modes (mutually exclusive):
 
-TODO(M6): add --sigstore flag for forgeseal keyless verification.`,
+  --ca-cert <ca.pem>  (keyed-CA, recommended)
+      Verifies the keyed-CA referrer: leaf cert must chain to the CA, and the
+      ECDSA-ASN1 signature over the manifest digest must be valid under the leaf.
+      Offline-verifiable: no network access beyond the registry.
+
+  --key <pub.pem>  (legacy back-compat)
+      Verifies the legacy bare-key referrer pushed by "bundle sign --key".`,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
 			ctx := context.Background()
 
-			pub, err := loadECPublicKey(pubKeyFile)
-			if err != nil {
-				// Unreadable/unparseable key file is a usage/input error.
-				return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: load key %q: %v", pubKeyFile, err)}
+			if caCertFile != "" && pubKeyFile != "" {
+				return &CLIError{Code: ExitUsage, Msg: "bundle verify: --ca-cert and --key are mutually exclusive"}
+			}
+			if caCertFile == "" && pubKeyFile == "" {
+				return &CLIError{Code: ExitUsage, Msg: "bundle verify: one of --ca-cert or --key is required"}
 			}
 
 			// Resolve the manifest descriptor directly from the registry so the
@@ -284,13 +356,30 @@ TODO(M6): add --sigstore flag for forgeseal keyless verification.`,
 
 			manifestDigest := subjectDesc.Digest.String()
 
-			if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, pub, bundle.PullOptions{
-				PlainHTTP: plainHTTP,
-				Transport: transport,
-			}); err != nil {
-				fmt.Fprintf(stdout, "INVALID: %v\n", err)
-				// Invalid or missing signature is an exit-1 deny, not a usage error.
-				return &CLIError{Code: ExitDeny, Msg: fmt.Sprintf("bundle verify: %v", err)}
+			if caCertFile != "" {
+				pool, err := loadCACertPool(caCertFile)
+				if err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: load CA cert %q: %v", caCertFile, err)}
+				}
+				if err := bundle.PullAndVerifyWithCAReferrer(ctx, manifestDigest, ref, pool, bundle.PullOptions{
+					PlainHTTP: plainHTTP,
+					Transport: transport,
+				}); err != nil {
+					fmt.Fprintf(stdout, "INVALID: %v\n", err)
+					return &CLIError{Code: ExitDeny, Msg: fmt.Sprintf("bundle verify: %v", err)}
+				}
+			} else {
+				pub, err := loadECPublicKey(pubKeyFile)
+				if err != nil {
+					return &CLIError{Code: ExitError, Msg: fmt.Sprintf("bundle verify: load key %q: %v", pubKeyFile, err)}
+				}
+				if err := bundle.PullAndVerifyReferrer(ctx, manifestDigest, ref, pub, bundle.PullOptions{
+					PlainHTTP: plainHTTP,
+					Transport: transport,
+				}); err != nil {
+					fmt.Fprintf(stdout, "INVALID: %v\n", err)
+					return &CLIError{Code: ExitDeny, Msg: fmt.Sprintf("bundle verify: %v", err)}
+				}
 			}
 
 			fmt.Fprintf(stdout, "OK: signature valid\n")
@@ -298,8 +387,8 @@ TODO(M6): add --sigstore flag for forgeseal keyless verification.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&pubKeyFile, "key", "", "path to ECDSA public key PEM file (required)")
-	_ = cmd.MarkFlagRequired("key")
+	cmd.Flags().StringVar(&caCertFile, "ca-cert", "", "path to CA certificate PEM file for keyed-CA verification (recommended)")
+	cmd.Flags().StringVar(&pubKeyFile, "key", "", "path to ECDSA public key PEM file (legacy bare-key mode)")
 	cmd.Flags().BoolVar(&plainHTTP, "plain-http", false, "use HTTP instead of HTTPS")
 
 	parent.AddCommand(cmd)
@@ -345,6 +434,56 @@ func loadECPublicKey(path string) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("expected *ecdsa.PublicKey, got %T", pub)
 	}
 	return ec, nil
+}
+
+// loadCACert reads a CA certificate from a PEM file and returns the parsed
+// *x509.Certificate. Used by the keyed-CA sign path.
+func loadCACert(path string) (*x509.Certificate, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found in %q", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	return cert, nil
+}
+
+// loadCACertPool reads a PEM certificate file and returns an *x509.CertPool
+// containing all CA certificates in the file. Used by the keyed-CA verify path.
+func loadCACertPool(path string) (*x509.CertPool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	pool := x509.NewCertPool()
+	rest := raw
+	added := 0
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, parseErr := x509.ParseCertificate(block.Bytes)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse certificate in %q: %w", path, parseErr)
+		}
+		pool.AddCert(cert)
+		added++
+	}
+	if added == 0 {
+		return nil, fmt.Errorf("no CERTIFICATE PEM blocks found in %q", path)
+	}
+	return pool, nil
 }
 
 // tagFromRef is re-exported for the CLI package. Delegates to the bundle
