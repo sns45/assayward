@@ -2,6 +2,31 @@
 
 // Generator for synthetic DSSE and SVID fixture files used in assayward tests.
 //
+// DETERMINISM CONTRACT — this file MUST remain deterministic:
+//
+//   - All ECDSA keys are derived directly from a SHA-256 scalar (see deriveKey).
+//     No crypto/rand and no ecdsa.GenerateKey. The Go P-256 implementation has
+//     sync.Once state that causes a variable number of bytes to be consumed from
+//     a reader depending on whether the P-256 curve is already initialised —
+//     making ecdsa.GenerateKey non-reproducible across calls within a process.
+//     We avoid it entirely by computing the private scalar directly from a hash.
+//
+//   - All ECDSA signing (JWTs and X.509 certificates) uses RFC 6979 deterministic
+//     mode. For JWTs, rfc6979Signer implements jose.OpaqueSigner and calls
+//     ecdsa.PrivateKey.Sign(nil, ...) which triggers RFC 6979 in Go 1.20+.
+//     For X.509 certs, x509.CreateCertificate is called with nil rand (Go 1.20+
+//     interprets nil rand as "use RFC 6979 for ECDSA").
+//
+//   - All timestamps are hard-coded constants; time.Now() is NEVER called.
+//
+//   - All serial numbers are hard-coded constants.
+//
+// Prove determinism:
+//
+//	go run testdata/gen/main.go
+//	go run testdata/gen/main.go
+//	git diff --stat testdata/svid/   # must show no changes
+//
 // SYNTHETIC PLACEHOLDERS: All generated fixtures are representative data for
 // development and CI testing. They will be replaced with real forgeseal/svidmint
 // artifacts before v0.1 ships. See testdata/README.md for details.
@@ -14,12 +39,15 @@
 package main
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -33,6 +61,112 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	josejwt "github.com/go-jose/go-jose/v4/jwt"
 )
+
+// Fixed timestamps used for all generated fixtures.
+// Using constants ensures the output is byte-identical across runs.
+var (
+	// fixedNotBefore is a fixed point in the past, well before any test run.
+	fixedNotBefore = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// fixedNotAfter is far in the future so fixtures never expire during tests.
+	fixedNotAfter = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// fixedExpiredBefore / fixedExpiredAfter bracket a window entirely in the past.
+	fixedExpiredBefore = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedExpiredAfter  = time.Date(2020, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// fixedIssuedAt is used as the iat claim in JWT-SVIDs.
+	fixedIssuedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// deriveKey deterministically derives an ECDSA P-256 private key from label.
+//
+// We do NOT use ecdsa.GenerateKey because it uses rejection sampling with a
+// reader, and elliptic.P256() has internal sync.Once state that causes a
+// different number of bytes to be consumed on the first vs subsequent calls
+// within the same process. Deriving the key scalar directly from a hash avoids
+// that variability entirely.
+func deriveKey(label string) *ecdsa.PrivateKey {
+	curve := elliptic.P256()
+	order := curve.Params().N
+
+	for counter := uint64(0); ; counter++ {
+		h := sha256.New()
+		h.Write([]byte("assayward-fixture-gen-v1:" + label + ":key"))
+		var ctr [8]byte
+		binary.BigEndian.PutUint64(ctr[:], counter)
+		h.Write(ctr[:])
+		scalar := new(big.Int).SetBytes(h.Sum(nil))
+
+		// The private scalar must be in [1, N-1].
+		if scalar.Sign() == 0 || scalar.Cmp(order) >= 0 {
+			continue
+		}
+
+		x, y := curve.ScalarBaseMult(scalar.Bytes())
+		return &ecdsa.PrivateKey{
+			PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+			D:         scalar,
+		}
+	}
+}
+
+// rfc6979Signer implements jose.OpaqueSigner using RFC 6979 deterministic ECDSA.
+//
+// Go 1.20+ triggers RFC 6979 when ecdsa.PrivateKey.Sign is called with a nil
+// rand reader. Implementing jose.OpaqueSigner lets us intercept the signing
+// call and supply nil, bypassing jose.RandReader entirely.
+type rfc6979Signer struct {
+	key *ecdsa.PrivateKey
+	kid string
+}
+
+// Public returns the JWK for the public key.
+func (s *rfc6979Signer) Public() *jose.JSONWebKey {
+	return &jose.JSONWebKey{
+		Key:       &s.key.PublicKey,
+		KeyID:     s.kid,
+		Algorithm: string(jose.ES256),
+		Use:       "sig",
+	}
+}
+
+// Algs returns the supported signing algorithms.
+func (s *rfc6979Signer) Algs() []jose.SignatureAlgorithm {
+	return []jose.SignatureAlgorithm{jose.ES256}
+}
+
+// SignPayload signs the payload using RFC 6979 deterministic ECDSA (nil rand).
+//
+// go-jose passes the raw JWS signing input and expects the signature in the
+// compact r || s encoding (32 + 32 bytes for P-256), not ASN.1 DER.
+// ecdsa.PrivateKey.Sign returns ASN.1 DER, so we parse and re-encode.
+func (s *rfc6979Signer) SignPayload(payload []byte, alg jose.SignatureAlgorithm) ([]byte, error) {
+	if alg != jose.ES256 {
+		return nil, fmt.Errorf("rfc6979Signer: unsupported algorithm %s", alg)
+	}
+	// Hash the payload with SHA-256 (ES256 requirement).
+	h := sha256.Sum256(payload)
+	// Pass nil rand to invoke RFC 6979 deterministic ECDSA (Go 1.20+).
+	// Returns ASN.1 DER encoded signature.
+	derSig, err := s.key.Sign(nil, h[:], crypto.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	// Parse the ASN.1 DER signature and re-encode as raw r || s.
+	// go-jose expects [r (32 bytes)] || [s (32 bytes)] for ES256 (P-256).
+	var ecSig struct{ R, S *big.Int }
+	if _, err := asn1.Unmarshal(derSig, &ecSig); err != nil {
+		return nil, fmt.Errorf("rfc6979Signer: unmarshal DER sig: %w", err)
+	}
+	const keyBytes = 32 // P-256: 256 bits / 8
+	out := make([]byte, 2*keyBytes)
+	rb := ecSig.R.Bytes()
+	sb := ecSig.S.Bytes()
+	copy(out[keyBytes-len(rb):keyBytes], rb)
+	copy(out[2*keyBytes-len(sb):], sb)
+	return out, nil
+}
 
 // Constants matching internal/testfix/testfix.go.
 const (
@@ -316,6 +450,10 @@ func main() {
 
 // writeSVIDFixtures generates all SVID-related fixtures into testdata/svid/.
 //
+// DETERMINISM: all keys are derived via deriveKey (pure SHA-256 scalar). JWT
+// signing uses rfc6979Signer (jose.OpaqueSigner) with nil rand => RFC 6979.
+// X.509 signing uses nil rand => RFC 6979. All timestamps are fixed constants.
+//
 // SYNTHETIC PLACEHOLDERS: all keys and certs here are freshly generated at
 // generation time and are NOT real svidmint credentials. They will be replaced
 // before v0.1 ships.
@@ -325,11 +463,8 @@ func writeSVIDFixtures(root string) {
 		log.Fatalf("mkdir svid: %v", err)
 	}
 
-	// Generate the primary JWT signing key (ECDSA P-256).
-	jwtKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate JWT key: %v", err)
-	}
+	// Generate the primary JWT signing key deterministically.
+	jwtKey := deriveKey("jwt-signing-key")
 
 	// --- JWT-SVID fixtures ---
 
@@ -339,13 +474,13 @@ func writeSVIDFixtures(root string) {
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-bundle.json"))
 
 	// jwt-valid.jwt: valid JWT-SVID, sub = spiffe://sns45.dev/ci/release,
-	// aud = [testImageDigest], exp far future.
-	validToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(87600*time.Hour), "svid-test-key-1")
+	// aud = [testImageDigest], exp far future (fixed to 2099-01-01).
+	validToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, fixedIssuedAt, fixedNotAfter, "svid-test-key-1")
 	writeFile(filepath.Join(svidDir, "jwt-valid.jwt"), []byte(validToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-valid.jwt"))
 
-	// jwt-expired.jwt: same as valid but exp in the past.
-	expiredToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(-1*time.Hour), "svid-test-key-1")
+	// jwt-expired.jwt: same as valid but exp in the past (fixed to 2020-06-01).
+	expiredToken := mustSignJWT(jwtKey, "spiffe://sns45.dev/ci/release", testImageDigest, fixedExpiredBefore, fixedExpiredAfter, "svid-test-key-1")
 	writeFile(filepath.Join(svidDir, "jwt-expired.jwt"), []byte(expiredToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-expired.jwt"))
 
@@ -353,45 +488,36 @@ func writeSVIDFixtures(root string) {
 	// [testImageDigest]. Rejected because the verifier looks up the bundle for
 	// "sns45.dev" (the only trusted domain) and evil.example has no entry there
 	// (missing-bundle rejection, NOT a cryptographic signature rejection).
-	wrongDomainKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate wrong-domain JWT key: %v", err)
-	}
-	wrongDomainToken := mustSignJWT(wrongDomainKey, "spiffe://evil.example/ci/release", testImageDigest, time.Now().Add(87600*time.Hour), "svid-test-key-1")
+	wrongDomainKey := deriveKey("jwt-wrong-domain-key")
+	wrongDomainToken := mustSignJWT(wrongDomainKey, "spiffe://evil.example/ci/release", testImageDigest, fixedIssuedAt, fixedNotAfter, "svid-test-key-1")
 	writeFile(filepath.Join(svidDir, "jwt-wrong-domain.jwt"), []byte(wrongDomainToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-wrong-domain.jwt"))
 
 	// jwt-wrong-key.jwt: sub = spiffe://sns45.dev/ci/release, aud =
-	// [testImageDigest], far-future exp. Signed by a SECOND freshly generated key
-	// (wrongSignKey) whose public key is NOT in jwt-bundle.json. Trust domain
-	// sns45.dev IS found in the bundle, so this exercises cryptographic signature
-	// rejection (not a missing-bundle rejection).
-	wrongSignKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate wrong-sign JWT key: %v", err)
-	}
-	wrongKeyToken := mustSignJWT(wrongSignKey, "spiffe://sns45.dev/ci/release", testImageDigest, time.Now().Add(87600*time.Hour), "svid-test-key-wrong")
+	// [testImageDigest], far-future exp. Signed by a SECOND key (wrongSignKey)
+	// whose public key is NOT in jwt-bundle.json. Trust domain sns45.dev IS
+	// found in the bundle, so this exercises cryptographic signature rejection
+	// (not a missing-bundle rejection).
+	wrongSignKey := deriveKey("jwt-wrong-sign-key")
+	wrongKeyToken := mustSignJWT(wrongSignKey, "spiffe://sns45.dev/ci/release", testImageDigest, fixedIssuedAt, fixedNotAfter, "svid-test-key-wrong")
 	writeFile(filepath.Join(svidDir, "jwt-wrong-key.jwt"), []byte(wrongKeyToken))
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "jwt-wrong-key.jwt"))
 
 	// --- X509-SVID fixtures ---
 
-	// Generate a self-signed CA key and cert.
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate CA key: %v", err)
-	}
-
+	// Generate a self-signed CA key and cert. Pass nil rand to x509.CreateCertificate
+	// to use RFC 6979 deterministic ECDSA signing (Go 1.20+).
+	caKey := deriveKey("x509-ca-key")
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "sns45.dev SVID Test CA"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(87600 * time.Hour),
+		NotBefore:             fixedNotBefore,
+		NotAfter:              fixedNotAfter,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
-	caCertDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCertDER, err := x509.CreateCertificate(nil, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	if err != nil {
 		log.Fatalf("create CA cert: %v", err)
 	}
@@ -406,11 +532,7 @@ func writeSVIDFixtures(root string) {
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-bundle.pem"))
 
 	// Generate a leaf key and cert signed by the CA.
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate leaf key: %v", err)
-	}
-
+	leafKey := deriveKey("x509-leaf-key")
 	spiffeURI, err := url.Parse("spiffe://sns45.dev/ci/release")
 	if err != nil {
 		log.Fatalf("parse SPIFFE URI: %v", err)
@@ -419,13 +541,13 @@ func writeSVIDFixtures(root string) {
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "sns45.dev/ci/release"},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(87600 * time.Hour),
+		NotBefore:    fixedNotBefore,
+		NotAfter:     fixedNotAfter,
 		URIs:         []*url.URL{spiffeURI},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
-	leafCertDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCertDER, err := x509.CreateCertificate(nil, leafTemplate, caCert, &leafKey.PublicKey, caKey)
 	if err != nil {
 		log.Fatalf("create leaf cert: %v", err)
 	}
@@ -437,22 +559,19 @@ func writeSVIDFixtures(root string) {
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-valid.pem"))
 
 	// x509-expired.pem: PEM leaf cert with URI SAN spiffe://sns45.dev/ci/release,
-	// signed by the SAME caKey/caCert as x509-valid.pem, but with NotAfter 1 hour
-	// in the past. Tests expiry rejection.
-	expiredLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate expired leaf key: %v", err)
-	}
+	// signed by the SAME caKey/caCert, but with NotAfter fixed to 2020-06-01
+	// (in the past). Tests expiry rejection.
+	expiredLeafKey := deriveKey("x509-expired-leaf-key")
 	expiredLeafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(3),
 		Subject:      pkix.Name{CommonName: "sns45.dev/ci/release"},
-		NotBefore:    time.Now().Add(-2 * time.Hour),
-		NotAfter:     time.Now().Add(-1 * time.Hour),
+		NotBefore:    fixedExpiredBefore,
+		NotAfter:     fixedExpiredAfter,
 		URIs:         []*url.URL{spiffeURI},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
-	expiredLeafCertDER, err := x509.CreateCertificate(rand.Reader, expiredLeafTemplate, caCert, &expiredLeafKey.PublicKey, caKey)
+	expiredLeafCertDER, err := x509.CreateCertificate(nil, expiredLeafTemplate, caCert, &expiredLeafKey.PublicKey, caKey)
 	if err != nil {
 		log.Fatalf("create expired leaf cert: %v", err)
 	}
@@ -460,23 +579,20 @@ func writeSVIDFixtures(root string) {
 	writeFile(filepath.Join(svidDir, "x509-expired.pem"), expiredLeafPEM)
 	fmt.Printf("wrote %s\n", filepath.Join(svidDir, "x509-expired.pem"))
 
-	// x509-wrong-ca.pem: PEM leaf cert with URI SAN spiffe://sns45.dev/ci/release,
-	// signed by a SECOND, completely separate CA (wrongCACert/wrongCAKey) that is
-	// NOT in x509-bundle.pem. Tests unknown-CA rejection.
-	wrongCAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate wrong CA key: %v", err)
-	}
+	// x509-wrong-ca.pem: PEM leaf cert signed by a SECOND, separate CA
+	// (wrongCACert/wrongCAKey) that is NOT in x509-bundle.pem.
+	// Tests unknown-CA rejection.
+	wrongCAKey := deriveKey("x509-wrong-ca-key")
 	wrongCATemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(100),
 		Subject:               pkix.Name{CommonName: "untrusted-ca.example SVID Test CA"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(87600 * time.Hour),
+		NotBefore:             fixedNotBefore,
+		NotAfter:              fixedNotAfter,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
-	wrongCACertDER, err := x509.CreateCertificate(rand.Reader, wrongCATemplate, wrongCATemplate, &wrongCAKey.PublicKey, wrongCAKey)
+	wrongCACertDER, err := x509.CreateCertificate(nil, wrongCATemplate, wrongCATemplate, &wrongCAKey.PublicKey, wrongCAKey)
 	if err != nil {
 		log.Fatalf("create wrong CA cert: %v", err)
 	}
@@ -485,20 +601,17 @@ func writeSVIDFixtures(root string) {
 		log.Fatalf("parse wrong CA cert: %v", err)
 	}
 
-	wrongCALeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate wrong-CA leaf key: %v", err)
-	}
+	wrongCALeafKey := deriveKey("x509-wrong-ca-leaf-key")
 	wrongCALeafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(101),
 		Subject:      pkix.Name{CommonName: "sns45.dev/ci/release"},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(87600 * time.Hour),
+		NotBefore:    fixedNotBefore,
+		NotAfter:     fixedNotAfter,
 		URIs:         []*url.URL{spiffeURI},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
-	wrongCALeafCertDER, err := x509.CreateCertificate(rand.Reader, wrongCALeafTemplate, wrongCACert, &wrongCALeafKey.PublicKey, wrongCAKey)
+	wrongCALeafCertDER, err := x509.CreateCertificate(nil, wrongCALeafTemplate, wrongCACert, &wrongCALeafKey.PublicKey, wrongCAKey)
 	if err != nil {
 		log.Fatalf("create wrong-CA leaf cert: %v", err)
 	}
@@ -525,9 +638,14 @@ func mustMarshalJWKS(key *ecdsa.PrivateKey) []byte {
 }
 
 // mustSignJWT creates and signs a compact JWT-SVID token with the given kid.
-func mustSignJWT(key *ecdsa.PrivateKey, sub, aud string, exp time.Time, kid string) string {
+//
+// Uses rfc6979Signer (jose.OpaqueSigner) so the ECDSA nonce is derived
+// deterministically via RFC 6979 — no randomness involved. iat and exp must
+// be fixed constants, never time.Now().
+func mustSignJWT(key *ecdsa.PrivateKey, sub, aud string, iat, exp time.Time, kid string) string {
+	opaque := &rfc6979Signer{key: key, kid: kid}
 	sig, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: jose.ES256, Key: key},
+		jose.SigningKey{Algorithm: jose.ES256, Key: opaque},
 		(&jose.SignerOptions{}).WithHeader("kid", kid).WithType("JWT"),
 	)
 	if err != nil {
@@ -537,7 +655,7 @@ func mustSignJWT(key *ecdsa.PrivateKey, sub, aud string, exp time.Time, kid stri
 	claims := josejwt.Claims{
 		Subject:  sub,
 		Audience: josejwt.Audience{aud},
-		IssuedAt: josejwt.NewNumericDate(time.Now()),
+		IssuedAt: josejwt.NewNumericDate(iat),
 		Expiry:   josejwt.NewNumericDate(exp),
 	}
 
