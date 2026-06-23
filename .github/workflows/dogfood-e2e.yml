@@ -1,0 +1,121 @@
+# End-to-end dogfood on REAL GitHub infra: builds all three tools, runs svidmint
+# in-job, mints a REAL publisher SVID from this job's GitHub OIDC token, produces
+# forgeseal keyed attestations, and gates with `assayward verify`. Validates the
+# svidmint github_oidc attestor + the full trilogy loop that cannot be tested offline.
+name: dogfood-e2e
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # real GitHub OIDC token for svidmint attestation
+
+jobs:
+  dogfood:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build assayward (from this checkout)
+        run: go build -o "$RUNNER_TEMP/bin/assayward" ./cmd/assayward
+
+      - name: Build forgeseal + svidmint (public repos)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          git clone --depth 1 https://github.com/sns45/forgeseal "$RUNNER_TEMP/forgeseal"
+          ( cd "$RUNNER_TEMP/forgeseal" && go build -o "$RUNNER_TEMP/bin/forgeseal" ./cmd/forgeseal )
+          git clone --depth 1 https://github.com/sns45/svidmint "$RUNNER_TEMP/svidmint"
+          ( cd "$RUNNER_TEMP/svidmint" && CGO_ENABLED=1 go build -o "$RUNNER_TEMP/bin/svidmint" ./cmd/svidmint )
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Start svidmint (CA + entry + server)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/sm"
+          svidmint ca init --trust-domain ci.svidmint.dev \
+            --root-key-path "$RUNNER_TEMP/sm/root.key" --root-cert-path "$RUNNER_TEMP/sm/root.crt"
+          cat > "$RUNNER_TEMP/sm/config.yaml" <<YAML
+          trust_domain: ci.svidmint.dev
+          server:
+            listen: ":8443"
+          ca:
+            type: self-signed
+            key_type: ec-p256
+            root_key_path: $RUNNER_TEMP/sm/root.key
+            root_cert_path: $RUNNER_TEMP/sm/root.crt
+            signing_ttl: 1h
+            default_svid_ttl: 5m
+            max_svid_ttl: 1h
+          storage:
+            type: sqlite
+            dsn: $RUNNER_TEMP/sm/dogfood.db
+          attestors:
+            github_oidc:
+              enabled: true
+              allowed_repositories:
+                - "sns45/assayward"
+              issuer: "https://token.actions.githubusercontent.com"
+          YAML
+          svidmint entry create --db "$RUNNER_TEMP/sm/dogfood.db" \
+            --spiffe-id spiffe://ci.svidmint.dev/github-actions/ci \
+            --attestor github_oidc --selector "github.repository:sns45/assayward" --ttl 300
+          svidmint server start --config "$RUNNER_TEMP/sm/config.yaml" &
+          for i in $(seq 1 20); do curl -sf http://localhost:8443/v1/health >/dev/null 2>&1 && break; sleep 1; done
+          curl -sf http://localhost:8443/v1/health || { echo "svidmint not healthy"; exit 1; }
+
+      - name: forgeseal keyed attestations
+        id: fs
+        run: |
+          set -euxo pipefail
+          OUT="$RUNNER_TEMP/fs-out"; mkdir -p "$OUT"
+          forgeseal sbom --dir "$RUNNER_TEMP/forgeseal" --output "$OUT/sbom.cdx.json"
+          forgeseal attest --subject "$OUT/sbom.cdx.json" --sign -o "$OUT/slsa.intoto.jsonl"
+          # forgeseal writes the keyed bundle next to the attestation + the CA in the cwd/output dir
+          mv "$OUT/slsa.intoto.jsonl.sigstore.json" "$OUT/slsa.sigstore-bundle.json"
+          [ -f "$OUT/forgeseal-signing-ca.crt" ] || cp "$RUNNER_TEMP/forgeseal/forgeseal-signing-ca.crt" "$OUT/forgeseal-signing-ca.crt" 2>/dev/null || cp ./forgeseal-signing-ca.crt "$OUT/forgeseal-signing-ca.crt" 2>/dev/null || true
+          # find the CA wherever forgeseal wrote it
+          find "$RUNNER_TEMP" "$HOME/.forgeseal" -name 'forgeseal-signing-ca.crt' 2>/dev/null | head -1 | xargs -I{} cp {} "$OUT/forgeseal-signing-ca.crt"
+          # clean VEX (vuln present but not_affected)
+          forgeseal vex create --id "https://forgeseal.dev/vex/release" --author forgeseal --output "$OUT/vex.openvex.json"
+          forgeseal vex add --vex "$OUT/vex.openvex.json" --cve CVE-2024-0001 --product "pkg:golang/x@1" --status not_affected --justification vulnerable_code_not_in_execute_path
+          DIGEST="sha256:$(jq -r '.subject[0].digest.sha256' "$OUT/slsa.intoto.jsonl")"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          ls -la "$OUT"
+
+      - name: Mint REAL svidmint publisher SVID (GitHub OIDC -> JWT-SVID)
+        id: svid
+        env:
+          DIGEST: ${{ steps.fs.outputs.digest }}
+        run: |
+          set -euxo pipefail
+          OIDC=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=svidmint-ci" | jq -r '.value')
+          [ -n "$OIDC" ] && [ "$OIDC" != "null" ] || { echo "no OIDC token"; exit 1; }
+          EVIDENCE=$(printf '{"oidc_token":"%s"}' "$OIDC" | base64 -w0)
+          # SVID audience = the artifact digest, so assayward's identity-binding check passes
+          RESP=$(curl -sf -X POST http://localhost:8443/v1/attest -H "Content-Type: application/json" \
+            -d "{\"evidence_type\":\"github_oidc\",\"evidence\":\"$EVIDENCE\",\"svid_type\":\"jwt\",\"audience\":[\"$DIGEST\"]}")
+          echo "attest spiffe_id: $(echo "$RESP" | jq -r '.spiffe_id')"
+          echo "$RESP" | jq -r '.svid.token // .token // empty' > "$RUNNER_TEMP/svid.jwt"
+          [ -s "$RUNNER_TEMP/svid.jwt" ] || { echo "no SVID token"; echo "$RESP"; exit 1; }
+          curl -sf http://localhost:8443/v1/jwks > "$RUNNER_TEMP/jwks.json"
+
+      - name: assayward verify (gate the trilogy)
+        env:
+          DIGEST: ${{ steps.fs.outputs.digest }}
+          OUT: ${{ steps.fs.outputs.out }}
+        run: |
+          set -euxo pipefail
+          assayward verify \
+            --forgeseal-output "$OUT" \
+            --image "forgeseal-artifact@$DIGEST" \
+            --signature-ca "$OUT/forgeseal-signing-ca.crt" \
+            --svid "$RUNNER_TEMP/svid.jwt" \
+            --spiffe-bundle "ci.svidmint.dev=$RUNNER_TEMP/jwks.json" \
+            --policy-file testdata/dogfood/policy-dogfood.yaml
+          echo "GATE PASSED: trilogy verified end-to-end on real GitHub OIDC"
