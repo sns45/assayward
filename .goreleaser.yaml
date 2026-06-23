@@ -67,6 +67,10 @@ changelog:
 # Migrate to the formula-specific key once goreleaser exposes one.
 brews:
   - name: assayward
+    # Push the Homebrew formula only when a tap token is configured (set the
+    # HOMEBREW_TAP_GITHUB_TOKEN secret). Without it the formula is still built
+    # but not pushed, so the release succeeds.
+    skip_upload: '{{ if .Env.HOMEBREW_TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
     ids:
       - default
     repository:
@@ -82,6 +86,8 @@ brews:
 
 scoops:
   - name: assayward
+    # Push the Scoop manifest only when SCOOP_GITHUB_TOKEN is configured.
+    skip_upload: '{{ if .Env.SCOOP_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
     ids:
       - default
     repository:
