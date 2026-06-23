@@ -14,24 +14,45 @@ import (
 	core "github.com/sns45/assayward/pkg/core"
 )
 
-// publicGoodTrustedRoot caches the public-good Sigstore trusted root fetched
-// via TUF so that repeated verifications within a single process do not each
-// incur a TUF round-trip. The cache is process-scoped and best-effort: if a
-// concurrent fetch is in progress, callers will serialise on mu.
+// liveTrustedRootConstructor is the function used to create a new
+// *root.LiveTrustedRoot. It is a package-level variable so tests can
+// substitute a fake that simulates transient failures without hitting the
+// network.
+var liveTrustedRootConstructor = func(opts *tuf.Options) (*root.LiveTrustedRoot, error) {
+	return root.NewLiveTrustedRoot(opts)
+}
+
+// publicGoodMu guards publicGoodLive. We use an explicit mutex (rather than
+// sync.Once) so that a transient TUF error on the first call is NOT cached
+// permanently. On every call where publicGoodLive is nil the constructor is
+// retried; once it succeeds the *LiveTrustedRoot is cached for the lifetime
+// of the process and self-refreshes every 24 h internally.
 var (
-	publicGoodOnce    sync.Once
-	publicGoodRoot    *root.TrustedRoot
-	publicGoodRootErr error
+	publicGoodMu   sync.Mutex
+	publicGoodLive *root.LiveTrustedRoot
 )
 
-// fetchPublicGoodRoot returns the public-good Sigstore trusted root, fetching
-// it from the public TUF repository on first call and caching the result for
-// the lifetime of the process.
-func fetchPublicGoodRoot() (*root.TrustedRoot, error) {
-	publicGoodOnce.Do(func() {
-		publicGoodRoot, publicGoodRootErr = root.FetchTrustedRootWithOptions(tuf.DefaultOptions())
-	})
-	return publicGoodRoot, publicGoodRootErr
+// fetchPublicGoodLiveRoot returns the process-scoped live trusted root,
+// creating it on first call (or retrying if previous attempts failed).
+// A *root.LiveTrustedRoot self-refreshes its trust material in the background
+// on a 24-hour period so long-running processes (the webhook) always see
+// current keys and intermediate CAs without a restart.
+func fetchPublicGoodLiveRoot() (*root.LiveTrustedRoot, error) {
+	publicGoodMu.Lock()
+	defer publicGoodMu.Unlock()
+
+	if publicGoodLive != nil {
+		return publicGoodLive, nil
+	}
+
+	ltr, err := liveTrustedRootConstructor(tuf.DefaultOptions())
+	if err != nil {
+		// Do NOT cache the error: next call will retry.
+		return nil, fmt.Errorf("init live trusted root: %w", err)
+	}
+
+	publicGoodLive = ltr
+	return publicGoodLive, nil
 }
 
 // nativeVerifier is the production Sigstore verifier. It requires tlog
@@ -48,12 +69,14 @@ func NewSignatureVerifier() SignatureVerifier {
 
 // Verify checks a Sigstore bundle for the given attestation. The
 // implementation:
+//
 //  0. First attempts keyed (self-signed-CA) verification via VerifyKeyedBundle.
 //     If the bundle carries a certificate WITHOUT tlogEntries and roots.SignatureCAs
 //     is set, the keyed verifier handles it (stdlib crypto only) and the result is
 //     returned immediately without touching sigstore-go.
 //  1. Resolves the trusted root: uses roots.SigstoreTUF when provided; otherwise
-//     fetches the Sigstore public-good trusted root via TUF (cached per-process).
+//     obtains the Sigstore public-good live trusted root (created once, retried on
+//     transient error, self-refreshing every 24 h for long-running processes).
 //  2. Parses the Sigstore bundle from att.Envelope.
 //  3. Verifies the bundle: tlog inclusion + cert chain (Fulcio).
 //  4. Extracts OIDC issuer and SAN from the verified leaf certificate.
@@ -68,20 +91,25 @@ func (v *nativeVerifier) Verify(att core.Attestation, img core.ImageRef, roots c
 	}
 
 	// Resolve trusted root: prefer injected SigstoreTUF JSON; fall back to the
-	// public-good TUF root fetched at runtime (cached per-process).
-	var trustedRoot *root.TrustedRoot
+	// public-good live trusted root (auto-refreshing, retry-on-failure).
+	var trustedMaterial root.TrustedMaterial
 	var err error
 	if len(roots.SigstoreTUF) > 0 {
-		trustedRoot, err = root.NewTrustedRootFromJSON(roots.SigstoreTUF)
+		var tr *root.TrustedRoot
+		tr, err = root.NewTrustedRootFromJSON(roots.SigstoreTUF)
 		if err != nil {
 			return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("parse trusted root: %v", err)}
 		}
+		trustedMaterial = tr
 	} else {
-		// No injected root: fetch the public-good trusted root via TUF.
-		trustedRoot, err = fetchPublicGoodRoot()
+		// No injected root: obtain the public-good live trusted root.
+		// A failed init is NOT cached; the next Verify call will retry.
+		var ltr *root.LiveTrustedRoot
+		ltr, err = fetchPublicGoodLiveRoot()
 		if err != nil {
 			return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("fetch public-good TUF root: %v", err)}
 		}
+		trustedMaterial = ltr
 	}
 
 	// Parse the Sigstore bundle from att.Envelope bytes.
@@ -95,7 +123,7 @@ func (v *nativeVerifier) Verify(att core.Attestation, img core.ImageRef, roots c
 	// We do NOT require CTlog entries here because older bundles (v0.1)
 	// may lack embedded SCTs.
 	sev, err := sgverify.NewVerifier(
-		root.TrustedMaterialCollection{trustedRoot},
+		root.TrustedMaterialCollection{trustedMaterial},
 		sgverify.WithTransparencyLog(1),
 		sgverify.WithObserverTimestamps(1),
 	)
