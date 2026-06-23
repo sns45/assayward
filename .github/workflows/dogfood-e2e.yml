@@ -48,7 +48,7 @@ jobs:
             root_key_path: $RUNNER_TEMP/sm/root.key
             root_cert_path: $RUNNER_TEMP/sm/root.crt
             signing_ttl: 1h
-            default_svid_ttl: 5m
+            default_svid_ttl: 30m
             max_svid_ttl: 1h
           storage:
             type: sqlite
@@ -62,7 +62,7 @@ jobs:
           YAML
           svidmint entry create --db "$RUNNER_TEMP/sm/dogfood.db" \
             --spiffe-id spiffe://ci.svidmint.dev/github-actions/ci \
-            --attestor github_oidc --selector "github.repository:sns45/assayward" --ttl 300
+            --attestor github_oidc --selector "github.repository:sns45/assayward" --ttl 1800
           svidmint server start --config "$RUNNER_TEMP/sm/config.yaml" &
           for i in $(seq 1 20); do curl -sf http://localhost:8443/v1/health >/dev/null 2>&1 && break; sleep 1; done
           curl -sf http://localhost:8443/v1/health || { echo "svidmint not healthy"; exit 1; }
@@ -118,4 +118,31 @@ jobs:
             --svid "$RUNNER_TEMP/svid.jwt" \
             --spiffe-bundle "ci.svidmint.dev=$RUNNER_TEMP/jwks.json" \
             --policy-file testdata/dogfood/policy-dogfood.yaml
-          echo "GATE PASSED: trilogy verified end-to-end on real GitHub OIDC"
+          echo "KEYED GATE PASSED: trilogy verified end-to-end on real GitHub OIDC"
+
+      - name: KEYLESS leg — forgeseal Fulcio+Rekor signing + assayward keyless gate
+        env:
+          DIGEST: ${{ steps.fs.outputs.digest }}
+          OUT: ${{ steps.fs.outputs.out }}
+        run: |
+          set -euxo pipefail
+          KL="$RUNNER_TEMP/fs-kl"; mkdir -p "$KL"
+          # Reuse the SAME SBOM (same digest D, so the same publisher SVID binds), produce a
+          # KEYLESS DSSE attestation: forgeseal gets its own OIDC token (audience sigstore) ->
+          # Fulcio cert -> Rekor tlog. Real public-good Sigstore.
+          cp "$OUT/sbom.cdx.json" "$KL/sbom.cdx.json"
+          cp "$OUT/vex.openvex.json" "$KL/vex.openvex.json"
+          forgeseal attest --subject "$KL/sbom.cdx.json" --sign --keyed=false -o "$KL/slsa.intoto.jsonl"
+          mv "$KL/slsa.intoto.jsonl.sigstore.json" "$KL/slsa.sigstore-bundle.json"
+          echo "--- keyless bundle has Fulcio cert chain + Rekor tlog: ---"
+          jq -r '.verificationMaterial | keys' "$KL/slsa.sigstore-bundle.json" || true
+          # assayward verifies the keyless bundle with sigstore-go against the public-good
+          # trust root (fetched via TUF; no --signature-ca). Policy targets the GitHub Actions
+          # keyless identity (issuer token.actions.githubusercontent.com, SAN github.com/sns45/*).
+          assayward verify \
+            --forgeseal-output "$KL" \
+            --image "forgeseal-artifact@$DIGEST" \
+            --svid "$RUNNER_TEMP/svid.jwt" \
+            --spiffe-bundle "ci.svidmint.dev=$RUNNER_TEMP/jwks.json" \
+            --policy-file testdata/dogfood/policy-dogfood-keyless.yaml
+          echo "KEYLESS GATE PASSED: real Fulcio+Rekor signature verified end-to-end"
