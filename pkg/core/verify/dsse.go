@@ -26,41 +26,67 @@ type dsseEnvelope struct {
 }
 
 // sigstoreBundleEnvelope is a minimal representation of a Sigstore bundle JSON
-// used to extract the embedded DSSE envelope from content.dsseEnvelope.
+// used to extract the embedded DSSE envelope. It handles two bundle shapes:
+//  1. forgeseal keyed bundles: DSSE envelope nested at content.dsseEnvelope.
+//  2. canonical Sigstore v0.3 bundles (protojson output): DSSE envelope at the
+//     top-level dsseEnvelope field (sibling of mediaType, verificationMaterial).
+//
 // This allows DecodeDSSE to transparently handle both bare DSSE envelopes and
 // Sigstore bundle JSON (mediaType: application/vnd.dev.sigstore.bundle.*).
 type sigstoreBundleEnvelope struct {
-	MediaType string `json:"mediaType"`
-	Content   struct {
-		DSSEEnvelope *dsseEnvelope `json:"dsseEnvelope"`
+	MediaType    string        `json:"mediaType"`
+	DSSEEnvelope *dsseEnvelope `json:"dsseEnvelope"` // canonical top-level (keyless)
+	Content      struct {
+		DSSEEnvelope *dsseEnvelope `json:"dsseEnvelope"` // forgeseal keyed shape
 	} `json:"content"`
+}
+
+// extractBundleDSSE extracts the DSSE envelope from a Sigstore bundle JSON,
+// accepting both the forgeseal keyed shape (content.dsseEnvelope) and the
+// canonical Sigstore v0.3 protojson shape (top-level dsseEnvelope). The
+// canonical top-level field is checked first; content.dsseEnvelope is the
+// fallback for forgeseal keyed bundles.
+func extractBundleDSSE(envelope []byte) *dsseEnvelope {
+	var bundle sigstoreBundleEnvelope
+	if err := json.Unmarshal(envelope, &bundle); err != nil {
+		return nil
+	}
+	// 1. Canonical Sigstore v0.3 shape: top-level dsseEnvelope (keyless bundles).
+	if bundle.DSSEEnvelope != nil && bundle.DSSEEnvelope.PayloadType != "" {
+		return bundle.DSSEEnvelope
+	}
+	// 2. forgeseal keyed shape: content.dsseEnvelope.
+	if bundle.Content.DSSEEnvelope != nil && bundle.Content.DSSEEnvelope.PayloadType != "" {
+		return bundle.Content.DSSEEnvelope
+	}
+	return nil
 }
 
 // DecodeDSSE parses a raw DSSE envelope JSON, base64-decodes the payload, and
 // returns a DecodedEnvelope. It returns a non-nil error for any malformed
 // input and never panics.
 //
-// DecodeDSSE transparently handles two input formats:
+// DecodeDSSE transparently handles three input formats:
 //  1. A bare DSSE envelope ({"payloadType":..., "payload":..., "signatures":[...]}).
-//  2. A Sigstore bundle JSON (mediaType: application/vnd.dev.sigstore.bundle.*),
-//     from which the embedded content.dsseEnvelope is extracted automatically.
+//  2. A canonical Sigstore v0.3 bundle (top-level dsseEnvelope field, used by
+//     real keyless bundles produced by sigstore-go / protojson.Marshal).
+//  3. A forgeseal keyed Sigstore bundle (content.dsseEnvelope field).
 //
-// This allows the engine to route predicates from both bare DSSE and Sigstore
-// bundle envelopes without requiring the adapter to strip the bundle wrapper.
+// This allows the engine to route predicates from bare DSSE, keyless Sigstore
+// bundles, and forgeseal keyed bundles without requiring the adapter to strip
+// the bundle wrapper.
 func DecodeDSSE(envelope []byte) (DecodedEnvelope, error) {
 	var env dsseEnvelope
 	if err := json.Unmarshal(envelope, &env); err != nil {
 		return DecodedEnvelope{}, fmt.Errorf("verify: unmarshal DSSE envelope: %w", err)
 	}
 
-	// If payloadType is empty after unmarshal, check whether this is a Sigstore
-	// bundle JSON with the DSSE envelope nested at content.dsseEnvelope.
+	// If payloadType is empty after unmarshal, this is a Sigstore bundle JSON.
+	// Check both the canonical top-level dsseEnvelope and the forgeseal keyed
+	// content.dsseEnvelope shapes via extractBundleDSSE.
 	if env.PayloadType == "" {
-		var bundle sigstoreBundleEnvelope
-		if jsonErr := json.Unmarshal(envelope, &bundle); jsonErr == nil &&
-			bundle.Content.DSSEEnvelope != nil &&
-			bundle.Content.DSSEEnvelope.PayloadType != "" {
-			env = *bundle.Content.DSSEEnvelope
+		if extracted := extractBundleDSSE(envelope); extracted != nil {
+			env = *extracted
 		}
 	}
 

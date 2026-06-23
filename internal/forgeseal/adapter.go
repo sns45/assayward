@@ -114,13 +114,33 @@ func EvidenceFromOutput(dir string, artifactDigest string) (core.Evidence, error
 	return ev, nil
 }
 
-// sigstoreBundle is a minimal JSON representation of a forgeseal Sigstore bundle.
-// Only the fields needed to extract the dsseEnvelope are present.
+// sigstoreBundle is a minimal JSON representation of a Sigstore bundle.
+// Only the fields needed to validate that a dsseEnvelope is present are decoded.
+//
+// Two bundle shapes are supported:
+//  1. forgeseal keyed bundles: dsseEnvelope is nested at content.dsseEnvelope.
+//  2. canonical Sigstore v0.3 bundles (protojson output from sigstore-go): the
+//     dsseEnvelope is a top-level field (sibling of mediaType and
+//     verificationMaterial), not wrapped in a content object.
 type sigstoreBundle struct {
-	MediaType string `json:"mediaType"`
-	Content   struct {
-		DSSEEnvelope json.RawMessage `json:"dsseEnvelope"`
+	MediaType    string          `json:"mediaType"`
+	DSSEEnvelope json.RawMessage `json:"dsseEnvelope"` // canonical top-level (keyless)
+	Content      struct {
+		DSSEEnvelope json.RawMessage `json:"dsseEnvelope"` // forgeseal keyed shape
 	} `json:"content"`
+}
+
+// bundleDSSEEnvelope returns the raw DSSE envelope bytes from a sigstoreBundle,
+// accepting both the canonical top-level shape and the forgeseal keyed shape.
+// Returns nil when neither field is populated.
+func bundleDSSEEnvelope(b sigstoreBundle) json.RawMessage {
+	if len(b.DSSEEnvelope) > 0 {
+		return b.DSSEEnvelope
+	}
+	if len(b.Content.DSSEEnvelope) > 0 {
+		return b.Content.DSSEEnvelope
+	}
+	return nil
 }
 
 // dsseEnvelopeWire is the bare DSSE envelope wire format consumed by DecodeDSSE.
@@ -161,13 +181,14 @@ func readSLSAAttestation(dir string) (core.Attestation, error) {
 		}, nil
 	}
 
-	// Validate the bundle is parseable JSON before storing.
+	// Validate the bundle is parseable JSON and contains a DSSE envelope in
+	// one of the two supported locations before storing.
 	var bundle sigstoreBundle
 	if err := json.Unmarshal(bundleBytes, &bundle); err != nil {
 		return core.Attestation{}, fmt.Errorf("parse sigstore bundle: %w", err)
 	}
-	if bundle.Content.DSSEEnvelope == nil {
-		return core.Attestation{}, fmt.Errorf("sigstore bundle has no content.dsseEnvelope")
+	if bundleDSSEEnvelope(bundle) == nil {
+		return core.Attestation{}, fmt.Errorf("sigstore bundle has no dsseEnvelope (checked top-level and content.dsseEnvelope)")
 	}
 
 	// Store the FULL bundle JSON as the Attestation Envelope so that:
