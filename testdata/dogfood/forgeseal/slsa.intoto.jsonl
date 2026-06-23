@@ -2,9 +2,9 @@
   "_type": "https://in-toto.io/Statement/v1",
   "subject": [
     {
-      "name": "/tmp/fs-out/sbom.cdx.json",
+      "name": "/tmp/fs-keyed/sbom.cdx.json",
       "digest": {
-        "sha256": "0c941bd483905285ae28f331495987a058da45f6d2883b1e7dc90387c5427665"
+        "sha256": "9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"
       }
     }
   ],
@@ -19,8 +19,8 @@
         "id": "https://forgeseal.dev/cli"
       },
       "metadata": {
-        "startedOn": "2026-06-22T20:24:44Z",
-        "finishedOn": "2026-06-22T20:24:44Z"
+        "startedOn": "2026-06-23T15:14:12Z",
+        "finishedOn": "2026-06-23T15:14:12Z"
       }
     }
   }

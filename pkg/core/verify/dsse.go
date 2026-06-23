@@ -25,13 +25,47 @@ type dsseEnvelope struct {
 	Signatures  json.RawMessage `json:"signatures"`
 }
 
+// sigstoreBundleEnvelope is a minimal representation of a Sigstore bundle JSON
+// used to extract the embedded DSSE envelope from content.dsseEnvelope.
+// This allows DecodeDSSE to transparently handle both bare DSSE envelopes and
+// Sigstore bundle JSON (mediaType: application/vnd.dev.sigstore.bundle.*).
+type sigstoreBundleEnvelope struct {
+	MediaType string `json:"mediaType"`
+	Content   struct {
+		DSSEEnvelope *dsseEnvelope `json:"dsseEnvelope"`
+	} `json:"content"`
+}
+
 // DecodeDSSE parses a raw DSSE envelope JSON, base64-decodes the payload, and
 // returns a DecodedEnvelope. It returns a non-nil error for any malformed
 // input and never panics.
+//
+// DecodeDSSE transparently handles two input formats:
+//  1. A bare DSSE envelope ({"payloadType":..., "payload":..., "signatures":[...]}).
+//  2. A Sigstore bundle JSON (mediaType: application/vnd.dev.sigstore.bundle.*),
+//     from which the embedded content.dsseEnvelope is extracted automatically.
+//
+// This allows the engine to route predicates from both bare DSSE and Sigstore
+// bundle envelopes without requiring the adapter to strip the bundle wrapper.
 func DecodeDSSE(envelope []byte) (DecodedEnvelope, error) {
 	var env dsseEnvelope
 	if err := json.Unmarshal(envelope, &env); err != nil {
 		return DecodedEnvelope{}, fmt.Errorf("verify: unmarshal DSSE envelope: %w", err)
+	}
+
+	// If payloadType is empty after unmarshal, check whether this is a Sigstore
+	// bundle JSON with the DSSE envelope nested at content.dsseEnvelope.
+	if env.PayloadType == "" {
+		var bundle sigstoreBundleEnvelope
+		if jsonErr := json.Unmarshal(envelope, &bundle); jsonErr == nil &&
+			bundle.Content.DSSEEnvelope != nil &&
+			bundle.Content.DSSEEnvelope.PayloadType != "" {
+			env = *bundle.Content.DSSEEnvelope
+		}
+	}
+
+	if env.PayloadType == "" {
+		return DecodedEnvelope{}, fmt.Errorf("verify: DSSE envelope has no payloadType")
 	}
 
 	payload, err := base64.StdEncoding.DecodeString(env.Payload)

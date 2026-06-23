@@ -4,6 +4,11 @@ package forgeseal_test
 // from forgeseal's REAL output artifacts, attaches a svidmint REAL publisher
 // JWT-SVID, evaluates them with assayward, and asserts the result is ALLOW.
 //
+// The §6.6 keyed-CA closure: the bundle's leaf cert (SAN https://forgeseal.dev/cli)
+// chains to the forgeseal-signing-ca.crt injected into TrustRoots.SignatureCAs.
+// The DSSE ECDSA signature is verified offline via stdlib crypto (no sigstore-go,
+// no Rekor). SignatureResultView.Verified is true, closing the signature gap.
+//
 // If the result is NOT allow this test prints the full decision (all reasons)
 // and fails — it does NOT fake the pass. A genuine DENY here means the wiring
 // or the artifacts need investigation.
@@ -26,8 +31,6 @@ import (
 	"github.com/sns45/assayward/pkg/core/policy"
 )
 
-const artifactDigest = "sha256:0c941bd483905285ae28f331495987a058da45f6d2883b1e7dc90387c5427665"
-
 // dogfoodDir returns the absolute path to testdata/dogfood.
 func dogfoodDir() string {
 	_, filename, _, ok := runtime.Caller(0)
@@ -39,11 +42,53 @@ func dogfoodDir() string {
 	return filepath.Join(filepath.Dir(filename), "..", "..", "testdata", "dogfood")
 }
 
+// artifactDigestFromFile reads the artifact digest from the committed
+// testdata/dogfood/artifact-digest.txt file (trimming trailing whitespace).
+func artifactDigestFromFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(dogfoodDir(), "artifact-digest.txt")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read artifact-digest.txt: %v", err)
+	}
+	// Trim trailing newline/whitespace.
+	digest := string(b)
+	for len(digest) > 0 && (digest[len(digest)-1] == '\n' || digest[len(digest)-1] == '\r' || digest[len(digest)-1] == ' ') {
+		digest = digest[:len(digest)-1]
+	}
+	return digest
+}
+
+// buildDogfoodRoots constructs TrustRoots with both the svidmint JWKS bundle
+// and the forgeseal signing CA (for keyed signature verification).
+func buildDogfoodRoots(t *testing.T) core.TrustRoots {
+	t.Helper()
+	dd := dogfoodDir()
+
+	jwksBytes, err := os.ReadFile(filepath.Join(dd, "svidmint", "trust-bundle-jwks.json"))
+	if err != nil {
+		t.Fatalf("read trust-bundle-jwks.json: %v", err)
+	}
+
+	caBytes, err := os.ReadFile(filepath.Join(dd, "forgeseal", "forgeseal-signing-ca.crt"))
+	if err != nil {
+		t.Fatalf("read forgeseal-signing-ca.crt: %v", err)
+	}
+
+	return core.TrustRoots{
+		SPIFFEBundles: map[string][]byte{
+			"ci.svidmint.dev": jwksBytes,
+		},
+		SignatureCAs: caBytes,
+	}
+}
+
 // TestDogfoodEvaluate_Allow verifies that forgeseal's real attestations
 // combined with svidmint's real publisher JWT-SVID evaluate to ALLOW under
-// the dogfood policy.
+// the dogfood policy. Signature is now REAL — keyed CA verification.
 func TestDogfoodEvaluate_Allow(t *testing.T) {
 	dd := dogfoodDir()
+	artifactDigest := artifactDigestFromFile(t)
 
 	// -------------------------------------------------------------------------
 	// 1. Build Evidence from forgeseal output.
@@ -66,17 +111,9 @@ func TestDogfoodEvaluate_Allow(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 3. Build TrustRoots with svidmint JWKS bundle.
+	// 3. Build TrustRoots with svidmint JWKS bundle AND forgeseal signing CA.
 	// -------------------------------------------------------------------------
-	jwksBytes, err := os.ReadFile(filepath.Join(dd, "svidmint", "trust-bundle-jwks.json"))
-	if err != nil {
-		t.Fatalf("read trust-bundle-jwks.json: %v", err)
-	}
-	roots := core.TrustRoots{
-		SPIFFEBundles: map[string][]byte{
-			"ci.svidmint.dev": jwksBytes,
-		},
-	}
+	roots := buildDogfoodRoots(t)
 
 	// -------------------------------------------------------------------------
 	// 4. Parse dogfood policy.
@@ -91,9 +128,9 @@ func TestDogfoodEvaluate_Allow(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 5. Evaluate with a fixed clock (2026-06-22T21:00:00Z).
+	// 5. Evaluate with a fixed clock (2026-06-23T16:00:00Z).
 	// -------------------------------------------------------------------------
-	fixedNow := time.Date(2026, 6, 22, 21, 0, 0, 0, time.UTC)
+	fixedNow := time.Date(2026, 6, 23, 16, 0, 0, 0, time.UTC)
 	dec := engine.Evaluate(ev, pol, roots, core.FixedClock{T: fixedNow})
 
 	// Print the full decision for diagnostic purposes regardless of result.
@@ -119,7 +156,10 @@ func TestDogfoodEvaluate_Allow(t *testing.T) {
 		}
 	}
 
-	// Spot-check specific reasons for explainability.
+	// Spot-check specific reasons for explainability — including signature reasons
+	// which now must be present and Met=true (proving real signature verification).
+	assertReasonMet(t, dec.Reasons, "SIGNATURE_REQUIRED_MISSING")
+	assertReasonMet(t, dec.Reasons, "SIGNATURE_IDENTITY_MISMATCH")
 	assertReasonMet(t, dec.Reasons, "SLSA_LEVEL_BELOW_THRESHOLD")
 	assertReasonMet(t, dec.Reasons, "SLSA_BUILDER_NOT_ALLOWED")
 	assertReasonMet(t, dec.Reasons, "SUBJECT_DIGEST_MISMATCH")
@@ -135,6 +175,7 @@ func TestDogfoodEvaluate_Allow(t *testing.T) {
 // the result must be DENY with SLSA_BUILDER_NOT_ALLOWED = false.
 func TestDogfoodEvaluate_DenyWrongBuilder(t *testing.T) {
 	dd := dogfoodDir()
+	artifactDigest := artifactDigestFromFile(t)
 
 	ev, err := forgeseal.EvidenceFromOutput(filepath.Join(dd, "forgeseal"), artifactDigest)
 	if err != nil {
@@ -150,15 +191,7 @@ func TestDogfoodEvaluate_DenyWrongBuilder(t *testing.T) {
 		Raw:      svidBytes,
 	}
 
-	jwksBytes, err := os.ReadFile(filepath.Join(dd, "svidmint", "trust-bundle-jwks.json"))
-	if err != nil {
-		t.Fatalf("read trust-bundle-jwks.json: %v", err)
-	}
-	roots := core.TrustRoots{
-		SPIFFEBundles: map[string][]byte{
-			"ci.svidmint.dev": jwksBytes,
-		},
-	}
+	roots := buildDogfoodRoots(t)
 
 	polBytes, err := os.ReadFile(filepath.Join(dd, "policy-dogfood.yaml"))
 	if err != nil {
@@ -172,7 +205,7 @@ func TestDogfoodEvaluate_DenyWrongBuilder(t *testing.T) {
 	// Override: require a DIFFERENT builder — one that forgeseal does NOT use.
 	pol.SLSA.AllowedBuilders = []string{"https://totally-different-builder.example.com/*"}
 
-	fixedNow := time.Date(2026, 6, 22, 21, 0, 0, 0, time.UTC)
+	fixedNow := time.Date(2026, 6, 23, 16, 0, 0, 0, time.UTC)
 	dec := engine.Evaluate(ev, pol, roots, core.FixedClock{T: fixedNow})
 
 	decJSON, _ := json.MarshalIndent(dec, "", "  ")
@@ -214,15 +247,7 @@ func TestDogfoodEvaluate_DenyWrongDigest(t *testing.T) {
 		Raw:      svidBytes,
 	}
 
-	jwksBytes, err := os.ReadFile(filepath.Join(dd, "svidmint", "trust-bundle-jwks.json"))
-	if err != nil {
-		t.Fatalf("read trust-bundle-jwks.json: %v", err)
-	}
-	roots := core.TrustRoots{
-		SPIFFEBundles: map[string][]byte{
-			"ci.svidmint.dev": jwksBytes,
-		},
-	}
+	roots := buildDogfoodRoots(t)
 
 	polBytes, err := os.ReadFile(filepath.Join(dd, "policy-dogfood.yaml"))
 	if err != nil {
@@ -233,7 +258,7 @@ func TestDogfoodEvaluate_DenyWrongDigest(t *testing.T) {
 		t.Fatalf("parse policy-dogfood.yaml: %v", err)
 	}
 
-	fixedNow := time.Date(2026, 6, 22, 21, 0, 0, 0, time.UTC)
+	fixedNow := time.Date(2026, 6, 23, 16, 0, 0, 0, time.UTC)
 	dec := engine.Evaluate(ev, pol, roots, core.FixedClock{T: fixedNow})
 
 	decJSON, _ := json.MarshalIndent(dec, "", "  ")

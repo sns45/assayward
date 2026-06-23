@@ -82,4 +82,8 @@ type Decision struct {
 type TrustRoots struct {
 	SigstoreTUF   []byte            `json:"sigstoreTUF,omitempty"`
 	SPIFFEBundles map[string][]byte `json:"spiffeBundles,omitempty"` // trustDomain -> JWKS/PEM
+	// SignatureCAs is a PEM bundle of CA certificates trusted for KEYED signature
+	// verification (i.e. self-signed-CA Sigstore bundles). It complements
+	// SigstoreTUF which is used for keyless Fulcio/Rekor verification.
+	SignatureCAs []byte `json:"signatureCAs,omitempty"`
 }

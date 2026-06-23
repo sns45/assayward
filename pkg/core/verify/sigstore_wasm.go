@@ -19,11 +19,21 @@ func NewSignatureVerifier() SignatureVerifier {
 	return &wasmVerifier{}
 }
 
-// Verify always returns Verified=false in the WASM runtime because
-// sigstore-go cannot be compiled for WASM (it transitively imports
-// unix-only syscalls via in-toto-golang). Callers that require a verified
-// signature MUST treat this as a verification failure (fail-closed).
-func (v *wasmVerifier) Verify(_ core.Attestation, _ core.ImageRef, _ core.TrustRoots) SignatureResult {
+// Verify first attempts keyed (self-signed-CA) verification via VerifyKeyedBundle
+// (stdlib crypto only, no sigstore-go, safe for WASM). If the bundle carries
+// certificate material and roots.SignatureCAs is set, the keyed result is returned.
+//
+// If the bundle is not a keyed bundle (no cert, or no SignatureCAs configured),
+// the call falls through to the fail-closed stub: sigstore-go cannot be compiled
+// for WASM (it transitively imports unix-only syscalls via in-toto-golang), so
+// callers that require keyless verification MUST treat this as a failure.
+func (v *wasmVerifier) Verify(att core.Attestation, img core.ImageRef, roots core.TrustRoots) SignatureResult {
+	// Try keyed (self-signed-CA) path first — this is WASM-safe stdlib crypto.
+	if result, handled := VerifyKeyedBundle(att, img, roots); handled {
+		return result
+	}
+
+	// Fall-closed stub: keyless sigstore-go is unavailable in WASM.
 	return SignatureResult{
 		Available: false, // verifier cannot run in WASM (fail-closed)
 		Verified:  false,

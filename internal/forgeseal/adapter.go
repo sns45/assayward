@@ -130,8 +130,13 @@ type dsseEnvelopeWire struct {
 	Signatures  json.RawMessage `json:"signatures"`
 }
 
-// readSLSAAttestation reads slsa.sigstore-bundle.json from dir and extracts the
-// embedded dsseEnvelope as a bare DSSE envelope JSON for core.Attestation.
+// readSLSAAttestation reads slsa.sigstore-bundle.json from dir and returns it
+// as a core.Attestation whose Envelope contains the FULL Sigstore bundle JSON.
+//
+// Storing the full bundle (rather than only the extracted dsseEnvelope) allows
+// the signature verifier to access verificationMaterial.certificate for keyed
+// (self-signed-CA) verification. The engine's DSSE predicate routing handles
+// Sigstore bundle JSON transparently via verify.DecodeDSSE's bundle-aware path.
 //
 // If the bundle file is absent but slsa.intoto.jsonl is present, the raw
 // Statement is wrapped into a synthetic DSSE envelope instead (fallback path).
@@ -156,7 +161,7 @@ func readSLSAAttestation(dir string) (core.Attestation, error) {
 		}, nil
 	}
 
-	// Parse the Sigstore bundle to extract the dsseEnvelope.
+	// Validate the bundle is parseable JSON before storing.
 	var bundle sigstoreBundle
 	if err := json.Unmarshal(bundleBytes, &bundle); err != nil {
 		return core.Attestation{}, fmt.Errorf("parse sigstore bundle: %w", err)
@@ -165,20 +170,14 @@ func readSLSAAttestation(dir string) (core.Attestation, error) {
 		return core.Attestation{}, fmt.Errorf("sigstore bundle has no content.dsseEnvelope")
 	}
 
-	// The dsseEnvelope field IS already a bare DSSE envelope JSON object
-	// (payloadType, payload, signatures). Re-marshal it cleanly to canonical JSON.
-	var env dsseEnvelopeWire
-	if err := json.Unmarshal(bundle.Content.DSSEEnvelope, &env); err != nil {
-		return core.Attestation{}, fmt.Errorf("parse dsseEnvelope from bundle: %w", err)
-	}
-	envelopeBytes, err := json.Marshal(env)
-	if err != nil {
-		return core.Attestation{}, fmt.Errorf("re-marshal dsseEnvelope: %w", err)
-	}
-
+	// Store the FULL bundle JSON as the Attestation Envelope so that:
+	//   - The signature verifier can access verificationMaterial.certificate
+	//     for keyed (self-signed-CA) DSSE signature verification.
+	//   - verify.DecodeDSSE transparently extracts content.dsseEnvelope for
+	//     predicate routing in the engine.
 	return core.Attestation{
 		PredicateType: "https://slsa.dev/provenance/v1",
-		Envelope:      envelopeBytes,
+		Envelope:      bundleBytes,
 	}, nil
 }
 

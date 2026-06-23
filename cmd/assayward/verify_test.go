@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -173,17 +174,29 @@ func TestVerifyNoAttestationSourceExits2(t *testing.T) {
 // TestVerifyForgesealDogfoodAllow exercises the --forgeseal-output CLI flag end-to-end
 // using the real forgeseal and svidmint dogfood fixtures. This is the CLI surface of
 // the §10 self-demonstrating loop and must exit 0 (allow).
+//
+// The artifact digest is read from artifact-digest.txt so the test stays in sync with
+// the committed bundle. --signature-ca supplies the forgeseal keyed CA for offline
+// DSSE signature verification (no Rekor, no Fulcio, stdlib crypto only).
 func TestVerifyForgesealDogfoodAllow(t *testing.T) {
 	root := testdataRoot()
 	dogfood := filepath.Join(root, "dogfood")
 
+	// Read the artifact digest from the committed file rather than hard-coding it.
+	digestBytes, err := os.ReadFile(filepath.Join(dogfood, "artifact-digest.txt"))
+	if err != nil {
+		t.Fatalf("read artifact-digest.txt: %v", err)
+	}
+	digest := strings.TrimRight(string(digestBytes), "\r\n ")
+
 	args := []string{
 		"verify",
 		"--forgeseal-output", filepath.Join(dogfood, "forgeseal"),
-		"--image", "forgeseal-artifact@sha256:0c941bd483905285ae28f331495987a058da45f6d2883b1e7dc90387c5427665",
+		"--image", "forgeseal-artifact@" + digest,
 		"--svid", filepath.Join(dogfood, "svidmint", "publisher-jwt-svid.jwt"),
 		"--svid-type", "jwt",
 		"--spiffe-bundle", "ci.svidmint.dev=" + filepath.Join(dogfood, "svidmint", "trust-bundle-jwks.json"),
+		"--signature-ca", filepath.Join(dogfood, "forgeseal", "forgeseal-signing-ca.crt"),
 		"--policy-file", filepath.Join(dogfood, "policy-dogfood.yaml"),
 		"--output", "json",
 	}

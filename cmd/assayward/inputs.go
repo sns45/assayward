@@ -23,6 +23,7 @@ type evalInputs struct {
 	PolicyFile      string
 	Image           string
 	SigstoreRoot    string
+	SignatureCA     string // --signature-ca: path to PEM CA bundle for keyed (self-signed-CA) verification
 	SPIFFEBundles   []string
 	SVID            string
 	SVIDType        string
@@ -43,6 +44,7 @@ func registerEvalFlags(cmd *cobra.Command, o *evalInputs) {
 	cmd.Flags().StringVar(&o.PolicyFile, "policy-file", "", "path to a TrustPolicy YAML file")
 	cmd.Flags().StringVar(&o.Image, "image", "", "image ref as name@sha256:<hex> (required)")
 	cmd.Flags().StringVar(&o.SigstoreRoot, "sigstore-trust-root", "", "path to a Sigstore trusted-root JSON")
+	cmd.Flags().StringVar(&o.SignatureCA, "signature-ca", "", "path to PEM CA bundle for keyed (self-signed-CA) Sigstore bundle verification")
 	cmd.Flags().StringArrayVar(&o.SPIFFEBundles, "spiffe-bundle", nil, "trustDomain=path entries (repeatable)")
 	cmd.Flags().StringVar(&o.SVID, "svid", "", "path to SVID credential (JWT token or PEM X.509)")
 	cmd.Flags().StringVar(&o.SVIDType, "svid-type", "auto", "jwt|x509|auto")
@@ -214,6 +216,17 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 			}
 		}
 		roots.SigstoreTUF = raw
+	}
+
+	if o.SignatureCA != "" {
+		raw, err := os.ReadFile(o.SignatureCA)
+		if err != nil {
+			return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+				Code: ExitError,
+				Msg:  fmt.Sprintf("%s: read --signature-ca: %v", cmdName, err),
+			}
+		}
+		roots.SignatureCAs = raw
 	}
 
 	if len(o.SPIFFEBundles) > 0 {

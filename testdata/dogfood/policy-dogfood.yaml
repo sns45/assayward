@@ -6,13 +6,20 @@ metadata:
 spec:
   mode: enforce
   signature:
-    # forgeseal Sigstore signing is STUBBED: the slsa.sigstore-bundle.json has
-    # no Fulcio certificate chain and no Rekor entry (verificationMaterial is
-    # absent). Cryptographic signature verification is therefore deferred.
-    # Trust is established via SLSA provenance (builder ID + subject digest),
-    # SBOM presence, VEX not_affected status, and the svidmint publisher JWT-SVID.
-    # Full Sigstore-keyless + forgeseal-verified signing is a tracked M6 gap.
-    required: false
+    # Signature is now verified via forgeseal's keyed CA (offline, stdlib crypto).
+    # The leaf cert (SAN: https://forgeseal.dev/cli) chains to the self-signed CA
+    # at testdata/dogfood/forgeseal/forgeseal-signing-ca.crt, injected into
+    # TrustRoots.SignatureCAs. ECDSA DSSE verification runs in both native and
+    # WASM builds without sigstore-go.
+    #
+    # Keyless Fulcio/Rekor is the future CI path (tracked gap: once forgeseal
+    # integrates a real Fulcio CA and Rekor instance, SigstoreTUF will be used).
+    required: true
+    keyless:
+      issuer: ""
+      identityPattern: "https://forgeseal.dev/*"
+    rekor:
+      required: false
   slsa:
     minLevel: 3
     allowedBuilders:

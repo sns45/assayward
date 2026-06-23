@@ -26,6 +26,10 @@ func NewSignatureVerifier() SignatureVerifier {
 
 // Verify checks a Sigstore bundle for the given attestation. The
 // implementation:
+//  0. First attempts keyed (self-signed-CA) verification via verifyKeyedBundle.
+//     If the bundle carries a certificate and roots.SignatureCAs is set, the
+//     keyed verifier handles it (stdlib crypto only) and the result is returned
+//     immediately without touching sigstore-go.
 //  1. Parses the trusted root from roots.SigstoreTUF.
 //  2. Parses the Sigstore bundle from att.Envelope.
 //  3. Verifies the bundle: tlog inclusion + cert chain (Fulcio).
@@ -33,7 +37,12 @@ func NewSignatureVerifier() SignatureVerifier {
 //
 // It is deliberately policy-agnostic: it does NOT enforce which identity
 // signed; that enforcement belongs to the policy layer.
-func (v *nativeVerifier) Verify(att core.Attestation, _ core.ImageRef, roots core.TrustRoots) SignatureResult {
+func (v *nativeVerifier) Verify(att core.Attestation, img core.ImageRef, roots core.TrustRoots) SignatureResult {
+	// Try keyed (self-signed-CA) verification first. If handled, return immediately.
+	if result, handled := VerifyKeyedBundle(att, img, roots); handled {
+		return result
+	}
+
 	if len(roots.SigstoreTUF) == 0 {
 		return SignatureResult{Available: true, Verified: false, Err: "no trust material"}
 	}
