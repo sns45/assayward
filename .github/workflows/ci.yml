@@ -1,0 +1,82 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go (build · vet · fmt · test · wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
+      - name: test (includes wazero wasm-parity + determinism)
+        run: go test ./...
+      - name: wasm builds (wasip1 + js)
+        run: |
+          GOOS=wasip1 GOARCH=wasm go build ./pkg/core/... ./core/wasm/
+          GOOS=js GOARCH=wasm go build ./core/wasm/
+      - name: core wasm isolation (no native adapter deps leak in)
+        run: |
+          n=$(GOOS=wasip1 GOARCH=wasm go list -deps ./pkg/core/... | grep -cE 'sigstore-go|in-toto-golang/in_toto$|cobra|go-containerregistry|k8s.io|oras|theupdateframework' || true)
+          echo "adapter deps in core wasm: $n"
+          test "$n" -eq 0
+
+  action:
+    name: action (entrypoint shell tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: entrypoint tests (builds the CLI, asserts arg mapping + exit codes)
+        run: bash action/entrypoint_test.sh
+
+  deploy:
+    name: deploy (helm lint + kustomize dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: azure/setup-kubectl@v4
+      - name: helm lint + template + client dry-run
+        run: |
+          helm lint deploy/helm/assayward-webhook
+          helm template aw deploy/helm/assayward-webhook -n assayward-system | kubectl apply --dry-run=client -f -
+          helm template aw deploy/helm/assayward-webhook -n assayward-system --set tls.mode=certManager >/dev/null
+      - name: kustomize base + overlay
+        run: |
+          kubectl kustomize deploy/kustomize/base | kubectl apply --dry-run=client -f -
+          kubectl kustomize deploy/kustomize/overlays/cert-manager >/dev/null
+
+  js:
+    name: js (wasm + npm + workers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
+      - name: build wasm artifacts
+        run: make wasm
+      - name: npm wrapper test (assay() returns expected Decision)
+        run: cd surfaces/npm && bun install && bun test
+      - name: workers template typecheck
+        run: cd templates/cloudflare && bun install && bunx tsc --noEmit
