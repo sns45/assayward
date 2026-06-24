@@ -2,6 +2,10 @@
 
 > A runtime trust gate that evaluates supply-chain attestations and workload identities to decide **whether to let a workload run**.
 
+<p align="center">
+  <img src="assets/marketing/poster.png" alt="assayward: a signature says it was signed; assayward says whether to open the door" width="600">
+</p>
+
 assayward is the third tool in a zero-trust supply-chain trilogy. It ingests the attestations [forgeseal](https://github.com/sns45/forgeseal) produces (CycloneDX SBOM, SLSA provenance, OpenVEX, Sigstore signatures) and the SPIFFE identities [svidmint](https://github.com/sns45/svidmint) issues, evaluates them against a declarative policy, and emits an explainable `allow` / `deny` / `audit` decision at the moment a workload is admitted or invoked.
 
 | Tool | Question it answers |
