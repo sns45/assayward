@@ -1,0 +1,17 @@
+{
+  "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "verificationMaterial": {
+    "certificate": {
+      "rawBytes": "MIIB2jCCAYCgAwIBAgIQW6Zo/LTCjAM4Av+QBx29zTAKBggqhkjOPQQDAjAzMRIwEAYDVQQKEwlGb3JnZXNlYWwxHTAbBgNVBAMTFEZvcmdlc2VhbCBTaWduaW5nIENBMB4XDTI2MDcxODIwNTc1NloXDTI3MDcxODIwNTc1NlowLTESMBAGA1UEChMJRm9yZ2VzZWFsMRcwFQYDVQQDEw5Gb3JnZXNlYWwgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABDso6dK5tFj17EORL+TvhFCv+JIOWFBBbWOnrFR0Y0VwGEl1b8c6UZlkmDU86ElG5fWNNQ/jWHgfTAwcM8A+qBOjfDB6MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAzAMBgNVHRMBAf8EAjAAMB8GA1UdIwQYMBaAFNNtZi16suwyL95fzZ9tLVy2EOBmMCQGA1UdEQQdMBuGGWh0dHBzOi8vZm9yZ2VzZWFsLmRldi9jbGkwCgYIKoZIzj0EAwIDSAAwRQIhAJ+vbZLHaFix0eSEX3cPslXA8AuOdpasY2uY1Q8Nk1cFAiA+WPokI8A4eRBIcm0ft1rTSnrE9fwSLVWAFGHiiyrQHw=="
+    }
+  },
+  "content": {
+    "messageSignature": {
+      "messageDigest": {
+        "algorithm": "SHA2_256",
+        "digest": "MFjcgUQDUXowl5FIcaIf8Dx+hNEw8NQagcmQkaWOUZY="
+      },
+      "signature": "MEUCIQCr40pj5pp0lDNU4mikdFI6Gl+3IEDRMAdEcSuAVwDoLgIgeaFadZtaKbkguY5fnVu1ZYM9Y1uc8GHBDkmDd6GZGnQ="
+    }
+  }
+}

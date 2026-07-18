@@ -1,0 +1,27 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "/Users/shantanu/dev/assayward/.claude/worktrees/issue2-forgeseal-adapter/internal/forgeseal/testdata/pipeline-output/sbom.cdx.json",
+      "digest": {
+        "sha256": "3058dc814403517a3097914871a21ff03c7e84d130f0d41a81c99091a58e5196"
+      }
+    }
+  ],
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "predicate": {
+    "buildDefinition": {
+      "buildType": "https://forgeseal.dev/build/v1",
+      "externalParameters": {}
+    },
+    "runDetails": {
+      "builder": {
+        "id": "https://forgeseal.dev/cli"
+      },
+      "metadata": {
+        "startedOn": "2026-07-18T20:57:56Z",
+        "finishedOn": "2026-07-18T20:57:56Z"
+      }
+    }
+  }
+}
