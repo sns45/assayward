@@ -11,7 +11,7 @@ func TestDecisionJSONRoundTrip(t *testing.T) {
 		Result:    ResultDeny,
 		Policy:    "slsa-l3@v1alpha1",
 		Reasons:   []Reason{{Code: "SLSA_LEVEL_BELOW_THRESHOLD", Severity: SeverityHigh, Detail: "got 2 want 3", Met: false}},
-		Evidence:  EvidenceSummary{Image: ImageRef{Name: "r/x:1", Digest: "sha256:abc"}, AttestationTypes: []string{"slsa"}},
+		Evidence:  EvidenceSummary{Artifact: ArtifactRef{Kind: "container", Name: "r/x:1", Digest: DigestSet{"sha256": "abc"}}, AttestationTypes: []string{"slsa"}},
 		DecidedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	b, err := json.Marshal(d)

@@ -40,12 +40,28 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	var sigView policy.SignatureResultView
 
 	for _, att := range ev.Attestations {
-		r := sigVerifier.Verify(att, ev.Image, roots)
+		r := sigVerifier.Verify(att, ev.Artifact, roots)
 		if r.Available {
 			sigView.Available = true
 		}
 		if r.Verified && !sigView.Verified {
 			// Carry identity fields from the first verified attestation.
+			sigView.Verified = true
+			sigView.Issuer = r.Issuer
+			sigView.SubjectIdentity = r.SubjectIdentity
+			sigView.RekorLogged = r.RekorLogged
+		}
+	}
+
+	// Fold a standalone blob signature (e.g. --signed-blob over a release
+	// artifact) into the same sigView, after attestation aggregation so a
+	// verified attestation's identity always wins (deterministic ordering).
+	if ev.BlobSignature != nil {
+		r := verify.VerifyBlobBundle(ev.BlobSignature.Bundle, ev.BlobSignature.ArtifactDigest, roots)
+		if r.Available {
+			sigView.Available = true
+		}
+		if r.Verified && !sigView.Verified {
 			sigView.Verified = true
 			sigView.Issuer = r.Issuer
 			sigView.SubjectIdentity = r.SubjectIdentity
@@ -79,7 +95,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 
 		switch {
 		case strings.Contains(predType, "slsa.dev/provenance"):
-			slsaResult = verify.VerifySLSA(env, ev.Image)
+			slsaResult = verify.VerifySLSA(env, ev.Artifact)
 		case strings.Contains(predType, "cyclonedx"):
 			sbomResult = verify.VerifySBOM(env)
 		case strings.Contains(predType, "openvex"):
@@ -92,7 +108,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	// -------------------------------------------------------------------------
 	var idResult verify.IdentityResult
 	if ev.Identity != nil {
-		idResult = verify.VerifyIdentity(*ev.Identity, ev.Image, roots)
+		idResult = verify.VerifyIdentity(*ev.Identity, ev.Artifact, roots)
 	}
 
 	// -------------------------------------------------------------------------
@@ -147,7 +163,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	// -------------------------------------------------------------------------
 	// Step 5: Evaluate policy and build Decision.
 	// -------------------------------------------------------------------------
-	result, reasons := policy.EvaluatePolicy(pol, sigView, slsaView, sbomView, vexView, idView)
+	result, reasons := policy.EvaluatePolicy(pol, sigView, slsaView, sbomView, vexView, idView, ev.Findings)
 
 	// Guarantee non-nil slice so JSON marshals to [] not null.
 	if reasons == nil {
@@ -177,7 +193,7 @@ func buildSummary(ev core.Evidence) core.EvidenceSummary {
 	}
 
 	return core.EvidenceSummary{
-		Image:            ev.Image,
+		Artifact:         ev.Artifact,
 		AttestationTypes: types,
 		IdentityPresent:  identityPresent,
 		SPIFFEID:         spiffeID,

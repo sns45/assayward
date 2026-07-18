@@ -36,9 +36,13 @@ type SLSAResult struct {
 	// and forgeseal provenance; this heuristic will be refined in a future release.
 	BuildLevel int
 
-	// SubjectDigestMatch is true when ANY subject in the statement has a
-	// "sha256" digest that matches the hex portion of img.Digest
-	// (case-insensitive comparison, stripping the "sha256:" prefix).
+	// SubjectDigestMatch is true when ANY subject in the statement shares AT
+	// LEAST ONE digest algorithm with art.Digest and the hex values are equal
+	// (case-insensitive comparison). Matching is algorithm-aware: an artifact
+	// digest under one algorithm (e.g. "smithmark-bundle-v1") is never
+	// compared against a subject digest under a different algorithm, so a
+	// coincidentally-equal hex value across algorithms cannot produce a false
+	// match.
 	SubjectDigestMatch bool
 
 	// Err is a non-empty human-readable error string when the statement or
@@ -48,8 +52,13 @@ type SLSAResult struct {
 
 // VerifySLSA parses the in-toto Statement carried in env.Payload, extracts
 // SLSA provenance fields, and checks whether the statement's subject digest
-// matches the image digest in img.
-func VerifySLSA(env DecodedEnvelope, img core.ImageRef) SLSAResult {
+// matches the artifact digest in art.
+//
+// Matching is algorithm-aware: every entry of art.Digest is compared against
+// the corresponding algorithm entry (if any) of each subject's digest map, so
+// container images (sha256), skills, and other artifact kinds using
+// non-sha256 digest algorithms are all supported without assuming sha256.
+func VerifySLSA(env DecodedEnvelope, art core.ArtifactRef) SLSAResult {
 	// Parse the Statement using protojson (required for the proto-based Statement type).
 	stmt := &attestv1.Statement{}
 	if err := protojson.Unmarshal(env.Payload, stmt); err != nil {
@@ -59,17 +68,13 @@ func VerifySLSA(env DecodedEnvelope, img core.ImageRef) SLSAResult {
 		}
 	}
 
-	// Extract the image digest hex to compare (strip the "sha256:" prefix).
-	imgDigestHex := strings.ToLower(strings.TrimPrefix(img.Digest, "sha256:"))
-
-	// Check whether any subject digest matches.
+	// Check whether any subject shares a digest algorithm with art.Digest and
+	// has an equal (case-insensitive) hex value under that algorithm.
 	subjectDigestMatch := false
 	for _, subj := range stmt.GetSubject() {
-		if hex, ok := subj.GetDigest()["sha256"]; ok {
-			if strings.EqualFold(hex, imgDigestHex) {
-				subjectDigestMatch = true
-				break
-			}
+		if subjectMatches(subj.GetDigest(), art) {
+			subjectDigestMatch = true
+			break
 		}
 	}
 
@@ -107,6 +112,22 @@ func VerifySLSA(env DecodedEnvelope, img core.ImageRef) SLSAResult {
 		BuildLevel:         buildLevel,
 		SubjectDigestMatch: subjectDigestMatch,
 	}
+}
+
+// subjectMatches reports whether any digest algorithm present in art.Digest
+// is also present in subjectDigest with a case-insensitively equal,
+// non-empty hex value. Comparison never crosses algorithms: a hex value that
+// happens to match under a different algorithm key is not a match.
+func subjectMatches(subjectDigest map[string]string, art core.ArtifactRef) bool {
+	for alg, hex := range art.Digest {
+		if hex == "" {
+			continue
+		}
+		if subjHex, ok := subjectDigest[alg]; ok && strings.EqualFold(subjHex, hex) {
+			return true
+		}
+	}
+	return false
 }
 
 // deriveBuildLevel applies the v0.1 structural heuristic to determine the

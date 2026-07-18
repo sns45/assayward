@@ -51,10 +51,11 @@ spec:
 	// which marshal to base64 in JSON. We need to marshal the evidence first, then
 	// build the envelope JSON object.
 	ev := core.Evidence{
-		Image: core.ImageRef{
+		Artifact: core.ImageRef{
 			Name:   testfix.TestImageName,
 			Digest: testfix.TestImageDigest,
-		},
+		}.AsArtifact(),
+		SchemaVersion: core.EvidenceSchemaVersion,
 		Attestations: []core.Attestation{
 			{Envelope: sigBundle, PredicateType: "sigstore-bundle"},
 			{Envelope: slsaEnv, PredicateType: "https://slsa.dev/provenance/v1"},
@@ -148,7 +149,7 @@ func TestRunEvaluateBadEnvelope(t *testing.T) {
 // TestRunEvaluateBadPolicy ensures runEvaluate returns an error on invalid policy.
 func TestRunEvaluateBadPolicy(t *testing.T) {
 	ev := core.Evidence{
-		Image: core.ImageRef{Name: "example.com/img:1", Digest: "sha256:abc"},
+		Artifact: core.ImageRef{Name: "example.com/img:1", Digest: "sha256:abc"}.AsArtifact(),
 	}
 	evBytes, _ := json.Marshal(ev)
 	rootsBytes, _ := json.Marshal(core.TrustRoots{})

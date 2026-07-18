@@ -85,10 +85,11 @@ func (e *coreEvaluator) Evaluate(ctx context.Context, img core.ImageRef) (core.D
 
 	t := e.now()
 	ev := core.Evidence{
-		Image:        img,
-		Attestations: atts,
-		Identity:     id,
-		FetchedAt:    t,
+		Artifact:      img.AsArtifact(),
+		Attestations:  atts,
+		Identity:      id,
+		SchemaVersion: core.EvidenceSchemaVersion,
+		FetchedAt:     t,
 	}
 
 	dec := engine.Evaluate(ev, e.pol, e.roots, core.FixedClock{T: t})

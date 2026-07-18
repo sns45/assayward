@@ -8,8 +8,17 @@ import (
 	"testing"
 
 	"github.com/sns45/assayward/internal/forgeseal"
+	core "github.com/sns45/assayward/pkg/core"
 	"github.com/sns45/assayward/pkg/core/verify"
 )
+
+// writeFile writes contents to name inside dir, failing the test on error.
+func writeFile(t *testing.T, dir, name, contents string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
 
 // TestEvidenceFromOutput_CanonicalKeylessBundle verifies that EvidenceFromOutput
 // correctly reads a canonical Sigstore v0.3 bundle (real keyless shape produced
@@ -104,5 +113,36 @@ func TestEvidenceFromOutput_CanonicalKeylessBundle(t *testing.T) {
 	}
 	if string(decoded.Payload) != string(statement) {
 		t.Errorf("decoded Payload = %q; want %q", string(decoded.Payload), string(statement))
+	}
+}
+
+// TestEvidenceFromOutputMissingVEXIsSoftSkip verifies that a directory with an
+// SBOM and a SLSA statement but no VEX document does not error: a missing VEX
+// is a soft skip under content discovery, not a hard requirement.
+func TestEvidenceFromOutputMissingVEXIsSoftSkip(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "sbom.cdx.json", `{"bomFormat":"CycloneDX","specVersion":"1.5"}`)
+	writeFile(t, dir, "sbom.cdx.json.intoto.jsonl", `{"_type":"https://in-toto.io/Statement/v1","predicateType":"https://slsa.dev/provenance/v1","subject":[]}`)
+
+	ev, err := forgeseal.EvidenceFromOutput(dir, "sha256:ab12")
+	if err != nil {
+		t.Fatalf("missing VEX must not error: %v", err)
+	}
+	if ev.Artifact.Kind != "container" || ev.SchemaVersion != core.EvidenceSchemaVersion {
+		t.Fatalf("artifact/schemaVersion not set: %+v", ev)
+	}
+	for _, at := range ev.Attestations {
+		if at.PredicateType == "https://openvex.dev/ns/v0.2.0" {
+			t.Fatalf("VEX attestation must not be present when no VEX file exists: %+v", ev.Attestations)
+		}
+	}
+}
+
+// TestEvidenceFromOutputNoSBOMNoSLSAErrors verifies that an empty (or
+// otherwise SBOM/SLSA-less) output directory is a hard error: at least one of
+// an SBOM or a SLSA artifact (bundle or statement) must be present.
+func TestEvidenceFromOutputNoSBOMNoSLSAErrors(t *testing.T) {
+	if _, err := forgeseal.EvidenceFromOutput(t.TempDir(), "sha256:ab12"); err == nil {
+		t.Fatal("empty dir must error")
 	}
 }

@@ -14,12 +14,12 @@ import (
 	"github.com/sns45/assayward/pkg/core/verify"
 )
 
-// testImg returns an ImageRef using the canonical test image name and digest.
-func testImg() core.ImageRef {
+// testImg returns an ArtifactRef using the canonical test image name and digest.
+func testImg() core.ArtifactRef {
 	return core.ImageRef{
 		Name:   testfix.TestImageName,
 		Digest: testfix.TestImageDigest,
-	}
+	}.AsArtifact()
 }
 
 // testRoots builds a TrustRoots with the given bundle bytes at key "sns45.dev".
@@ -98,7 +98,7 @@ func TestVerifyIdentity_JWT_WrongAudience(t *testing.T) {
 	differentImg := core.ImageRef{
 		Name:   testfix.TestImageName,
 		Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}
+	}.AsArtifact()
 	id := core.WorkloadIdentity{
 		SVIDType: core.SVIDTypeJWT,
 		Raw:      token,

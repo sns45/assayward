@@ -31,11 +31,43 @@ type ImageRef struct {
 	Digest string `json:"digest"` // sha256:...
 }
 
+// DigestSet maps a digest algorithm to its hex value, mirroring in-toto
+// Statement subject digests, e.g. {"sha256": "ab.."} or
+// {"smithmark-bundle-v1": "cd.."}.
+type DigestSet map[string]string
+
+// ArtifactRef identifies the attested subject and its kind.
+type ArtifactRef struct {
+	Kind   string    `json:"kind"`   // "container" | "mcp-server" | "skill"
+	Name   string    `json:"name"`   // registry/repo:tag, purl, or skill name
+	Digest DigestSet `json:"digest"` // algorithm keyed
+	Source string    `json:"source,omitempty"`
+}
+
+// Finding is one capability lint declared-versus-detected gap.
+type Finding struct {
+	Code     string   `json:"code"`
+	Severity Severity `json:"severity"`
+	Detail   string   `json:"detail,omitempty"`
+	Location string   `json:"location,omitempty"`
+}
+
+// BlobSignature is a standalone Sigstore messageSignature bundle over a raw
+// artifact (e.g. a release archive), verified against ArtifactDigest, not a
+// predicate.
+type BlobSignature struct {
+	Bundle         []byte `json:"bundle"`
+	ArtifactDigest string `json:"artifactDigest"` // "sha256:<hex>"
+}
+
 type Evidence struct {
-	Image        ImageRef          `json:"image"`
-	Attestations []Attestation     `json:"attestations"`
-	Identity     *WorkloadIdentity `json:"identity,omitempty"`
-	FetchedAt    time.Time         `json:"fetchedAt"` // injected, not read from a clock
+	Artifact      ArtifactRef       `json:"artifact"`
+	Attestations  []Attestation     `json:"attestations"`
+	Identity      *WorkloadIdentity `json:"identity,omitempty"`
+	Findings      []Finding         `json:"findings,omitempty"`
+	BlobSignature *BlobSignature    `json:"blobSignature,omitempty"`
+	SchemaVersion string            `json:"schemaVersion"`
+	FetchedAt     time.Time         `json:"fetchedAt"` // injected, not read from a clock
 }
 
 type Attestation struct {
@@ -63,10 +95,10 @@ type Reason struct {
 }
 
 type EvidenceSummary struct {
-	Image            ImageRef `json:"image"`
-	AttestationTypes []string `json:"attestationTypes"`
-	IdentityPresent  bool     `json:"identityPresent"`
-	SPIFFEID         string   `json:"spiffeID,omitempty"`
+	Artifact         ArtifactRef `json:"artifact"`
+	AttestationTypes []string    `json:"attestationTypes"`
+	IdentityPresent  bool        `json:"identityPresent"`
+	SPIFFEID         string      `json:"spiffeID,omitempty"`
 }
 
 type Decision struct {

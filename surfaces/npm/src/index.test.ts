@@ -44,9 +44,10 @@ function b64(filePath: string): string {
 // Fixture constants (match testfix.go and golden_test.go)
 // -------------------------------------------------------------------
 const TEST_IMAGE_NAME = "ghcr.io/sns45/example:1.0.0";
-const TEST_IMAGE_DIGEST =
-  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const TEST_IMAGE_DIGEST_HEX =
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const GOLDEN_NOW = "2026-01-01T00:00:00Z";
+const SCHEMA_VERSION = "0.2.0";
 
 // -------------------------------------------------------------------
 // Import the module under test (after TDD: types exist, impl to follow)
@@ -76,7 +77,12 @@ describe("assayward npm wrapper", () => {
     const policyYaml = readFileSync(policyPath, "utf8");
 
     const evidence: Evidence = {
-      image: { name: TEST_IMAGE_NAME, digest: TEST_IMAGE_DIGEST },
+      artifact: {
+        kind: "container",
+        name: TEST_IMAGE_NAME,
+        digest: { sha256: TEST_IMAGE_DIGEST_HEX },
+      },
+      schemaVersion: SCHEMA_VERSION,
       attestations: [
         {
           predicateType: "sigstore-bundle",
@@ -131,8 +137,8 @@ describe("assayward npm wrapper", () => {
     expect(identityReasons.length).toBeGreaterThan(0);
 
     // Evidence summary should match golden
-    expect(decision.evidence.image.name).toBe(TEST_IMAGE_NAME);
-    expect(decision.evidence.image.digest).toBe(TEST_IMAGE_DIGEST);
+    expect(decision.evidence.artifact.name).toBe(TEST_IMAGE_NAME);
+    expect(decision.evidence.artifact.digest.sha256).toBe(TEST_IMAGE_DIGEST_HEX);
     expect(decision.evidence.identityPresent).toBe(true);
     expect(decision.decidedAt).toBe(GOLDEN_NOW);
   });
@@ -156,7 +162,12 @@ spec:
 `;
 
     const evidence: Evidence = {
-      image: { name: TEST_IMAGE_NAME, digest: TEST_IMAGE_DIGEST },
+      artifact: {
+        kind: "container",
+        name: TEST_IMAGE_NAME,
+        digest: { sha256: TEST_IMAGE_DIGEST_HEX },
+      },
+      schemaVersion: SCHEMA_VERSION,
       attestations: [
         {
           predicateType: "sigstore-bundle",
@@ -192,7 +203,12 @@ spec:
     const policyYaml = readFileSync(policyPath, "utf8");
 
     const evidence: Evidence = {
-      image: { name: TEST_IMAGE_NAME, digest: TEST_IMAGE_DIGEST },
+      artifact: {
+        kind: "container",
+        name: TEST_IMAGE_NAME,
+        digest: { sha256: TEST_IMAGE_DIGEST_HEX },
+      },
+      schemaVersion: SCHEMA_VERSION,
       attestations: [],
       identity: {
         spiffeID: "spiffe://sns45.dev/ci/release",

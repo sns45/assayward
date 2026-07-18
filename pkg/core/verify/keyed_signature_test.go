@@ -61,10 +61,10 @@ func loadKeyedTestFixtures(t testing.TB) (att core.Attestation, caBytes []byte) 
 // passes verification when the correct CA is supplied.
 func TestKeyedBundle_HappyPath(t *testing.T) {
 	att, caBytes := loadKeyedTestFixtures(t)
-	img := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}
+	art := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}.AsArtifact()
 	roots := core.TrustRoots{SignatureCAs: caBytes}
 
-	result, handled := verify.VerifyKeyedBundle(att, img, roots)
+	result, handled := verify.VerifyKeyedBundle(att, art, roots)
 
 	if !handled {
 		t.Fatal("expected handled=true for keyed bundle with SignatureCAs set")
@@ -140,10 +140,10 @@ func TestKeyedBundle_TamperedPayload(t *testing.T) {
 	}
 
 	att := core.Attestation{Envelope: tamperedBundle}
-	img := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}
+	art := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}.AsArtifact()
 	roots := core.TrustRoots{SignatureCAs: caBytes}
 
-	result, handled := verify.VerifyKeyedBundle(att, img, roots)
+	result, handled := verify.VerifyKeyedBundle(att, art, roots)
 
 	if !handled {
 		t.Fatal("expected handled=true")
@@ -158,7 +158,7 @@ func TestKeyedBundle_TamperedPayload(t *testing.T) {
 // causes Verified=false because the leaf cert cannot chain to it.
 func TestKeyedBundle_WrongCA(t *testing.T) {
 	att, _ := loadKeyedTestFixtures(t)
-	img := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}
+	art := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}.AsArtifact()
 
 	// Use a truncated/malformed PEM that will not parse as a valid CA cert.
 	// x509.CertPool.AppendCertsFromPEM silently ignores malformed PEM blocks,
@@ -167,7 +167,7 @@ func TestKeyedBundle_WrongCA(t *testing.T) {
 
 	roots := core.TrustRoots{SignatureCAs: fakeCAPEM}
 
-	result, handled := verify.VerifyKeyedBundle(att, img, roots)
+	result, handled := verify.VerifyKeyedBundle(att, art, roots)
 
 	if !handled {
 		t.Fatal("expected handled=true (certificate material present, SignatureCAs set)")
@@ -182,10 +182,10 @@ func TestKeyedBundle_WrongCA(t *testing.T) {
 // verifyKeyedBundle returns handled=false so the caller falls through to keyless/stub.
 func TestKeyedBundle_NoSignatureCAs(t *testing.T) {
 	att, _ := loadKeyedTestFixtures(t)
-	img := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}
+	art := core.ImageRef{Name: "forgeseal-artifact", Digest: "sha256:9380231e5a304d44828280dac94dd10e511171879d4b9086722065e251f7ed74"}.AsArtifact()
 	roots := core.TrustRoots{} // no SignatureCAs
 
-	_, handled := verify.VerifyKeyedBundle(att, img, roots)
+	_, handled := verify.VerifyKeyedBundle(att, art, roots)
 
 	if handled {
 		t.Fatal("expected handled=false when SignatureCAs is empty")
@@ -230,7 +230,7 @@ func TestKeyedBundle_SkipsKeylessBundle_WithTlogEntries(t *testing.T) {
 		PredicateType: "https://slsa.dev/provenance/v1",
 		Envelope:      keylessBundleJSON,
 	}
-	img := core.ImageRef{Name: "test-image", Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+	art := core.ImageRef{Name: "test-image", Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}.AsArtifact()
 
 	// With SignatureCAs set: the old code would claim this bundle (certificate present +
 	// SignatureCAs set = handled=true). The new code must detect tlogEntries and return
@@ -238,7 +238,7 @@ func TestKeyedBundle_SkipsKeylessBundle_WithTlogEntries(t *testing.T) {
 	_, caBytes := loadKeyedTestFixtures(t)
 	roots := core.TrustRoots{SignatureCAs: caBytes}
 
-	_, handled := verify.VerifyKeyedBundle(att, img, roots)
+	_, handled := verify.VerifyKeyedBundle(att, art, roots)
 
 	if handled {
 		t.Fatal("VerifyKeyedBundle must return handled=false for a bundle with tlogEntries (keyless bundle); keyed verifier must not claim keyless bundles")
@@ -280,12 +280,12 @@ func TestKeyedBundle_SkipsKeylessBundle_WithX509CertChain(t *testing.T) {
 		PredicateType: "https://slsa.dev/provenance/v1",
 		Envelope:      keylessBundleJSON,
 	}
-	img := core.ImageRef{Name: "test-image", Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+	art := core.ImageRef{Name: "test-image", Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}.AsArtifact()
 
 	_, caBytes := loadKeyedTestFixtures(t)
 	roots := core.TrustRoots{SignatureCAs: caBytes}
 
-	_, handled := verify.VerifyKeyedBundle(att, img, roots)
+	_, handled := verify.VerifyKeyedBundle(att, art, roots)
 
 	if handled {
 		t.Fatal("VerifyKeyedBundle must return handled=false for a bundle with x509CertificateChain+tlogEntries (keyless bundle)")

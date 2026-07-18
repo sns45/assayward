@@ -31,10 +31,10 @@ func goldenDir() string {
 func goldenEvidence(t *testing.T) core.Evidence {
 	t.Helper()
 	return core.Evidence{
-		Image: core.ImageRef{
+		Artifact: core.ImageRef{
 			Name:   testfix.TestImageName,
 			Digest: testfix.TestImageDigest,
-		},
+		}.AsArtifact(),
 		Attestations: []core.Attestation{
 			{Envelope: testfix.Load(t, "signature/bundle-provenance.json"), PredicateType: "sigstore-bundle"},
 			{Envelope: testfix.Load(t, "slsa/valid-l3.dsse.json"), PredicateType: "https://slsa.dev/provenance/v1"},

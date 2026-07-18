@@ -52,7 +52,7 @@ type keyedBundle struct {
 //
 // This function uses only stdlib crypto (crypto/x509, crypto/ecdsa, crypto/sha256)
 // and never imports sigstore-go, keeping it safe for WASM builds.
-func VerifyKeyedBundle(att core.Attestation, _ core.ImageRef, roots core.TrustRoots) (SignatureResult, bool) {
+func VerifyKeyedBundle(att core.Attestation, _ core.ArtifactRef, roots core.TrustRoots) (SignatureResult, bool) {
 	// Parse the bundle JSON.
 	var b keyedBundle
 	if err := json.Unmarshal(att.Envelope, &b); err != nil {

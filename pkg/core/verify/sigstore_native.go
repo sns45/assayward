@@ -83,10 +83,10 @@ func NewSignatureVerifier() SignatureVerifier {
 //
 // It is deliberately policy-agnostic: it does NOT enforce which identity
 // signed; that enforcement belongs to the policy layer.
-func (v *nativeVerifier) Verify(att core.Attestation, img core.ImageRef, roots core.TrustRoots) SignatureResult {
+func (v *nativeVerifier) Verify(att core.Attestation, art core.ArtifactRef, roots core.TrustRoots) SignatureResult {
 	// Try keyed (self-signed-CA) verification first. If handled, return immediately.
 	// VerifyKeyedBundle returns handled=false for keyless bundles (tlogEntries present).
-	if result, handled := VerifyKeyedBundle(att, img, roots); handled {
+	if result, handled := VerifyKeyedBundle(att, art, roots); handled {
 		return result
 	}
 

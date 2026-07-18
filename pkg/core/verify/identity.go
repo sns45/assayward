@@ -5,8 +5,9 @@ package verify
 //
 // # Binding semantics (v0.1 placeholder, documented)
 //
-// JWT-SVID binding: the workload's expected audience is set to img.Digest (the
-// OCI image digest). ParseAndValidate is called with that audience so the
+// JWT-SVID binding: the workload's expected audience is set to
+// "sha256:"+art.Digest["sha256"] (the OCI image digest, in the pre-ArtifactRef
+// "sha256:<hex>" form). ParseAndValidate is called with that audience so the
 // SPIFFE JWT-SVID must have been issued specifically for this image. This is a
 // v0.1 WIMSE placeholder: real workload-image binding will use a richer
 // mechanism in a future release.
@@ -72,12 +73,12 @@ type IdentityResult struct {
 //
 // On any parse or validation error IdentityResult.Verified is false and
 // IdentityResult.Err is non-empty. This function never panics.
-func VerifyIdentity(id core.WorkloadIdentity, img core.ImageRef, roots core.TrustRoots) IdentityResult {
+func VerifyIdentity(id core.WorkloadIdentity, art core.ArtifactRef, roots core.TrustRoots) IdentityResult {
 	switch id.SVIDType {
 	case core.SVIDTypeJWT:
-		return verifyJWT(id.Raw, img, roots)
+		return verifyJWT(id.Raw, art, roots)
 	case core.SVIDTypeX509:
-		return verifyX509(id.Raw, img, roots)
+		return verifyX509(id.Raw, art, roots)
 	default:
 		return IdentityResult{
 			Verified: false,
@@ -92,14 +93,16 @@ func VerifyIdentity(id core.WorkloadIdentity, img core.ImageRef, roots core.Trus
 // (e.g. "spiffe://ci.svidmint.dev/..."). The trust domain is extracted from
 // that SPIFFE ID and used to select the correct JWKS from roots.SPIFFEBundles.
 // This removes the compile-time coupling to any specific trust domain.
-func verifyJWT(raw []byte, img core.ImageRef, roots core.TrustRoots) IdentityResult {
+func verifyJWT(raw []byte, art core.ArtifactRef, roots core.TrustRoots) IdentityResult {
 	token := string(raw)
 
 	// Step 1: ParseInsecure to extract SPIFFE ID (sub) without bundle lookup.
-	// Audience validation here uses img.Digest — same audience we will require
-	// in the secure pass below. If audience does not match we fail early before
-	// any bundle lookup.
-	audience := []string{img.Digest}
+	// Audience validation here uses "sha256:"+art.Digest["sha256"] — same
+	// audience we will require in the secure pass below. This reconstructs the
+	// pre-ArtifactRef "sha256:<hex>" form (DigestSet stores bare hex) so the
+	// v0.1 audience-binding placeholder's format is unchanged. If audience does
+	// not match we fail early before any bundle lookup.
+	audience := []string{"sha256:" + art.Digest["sha256"]}
 	insecure, err := jwtsvid.ParseInsecure(token, audience)
 	if err != nil {
 		return IdentityResult{
@@ -151,7 +154,7 @@ func verifyJWT(raw []byte, img core.ImageRef, roots core.TrustRoots) IdentityRes
 		Verified:     true,
 		SPIFFEID:     svid.ID.String(),
 		TrustDomain:  "spiffe://" + td.String(),
-		BindingMatch: true, // audience matched img.Digest
+		BindingMatch: true, // audience matched art.Digest["sha256"]
 	}
 }
 
@@ -160,7 +163,7 @@ func verifyJWT(raw []byte, img core.ImageRef, roots core.TrustRoots) IdentityRes
 // Trust domain resolution: the leaf certificate's URI SAN is parsed to extract
 // the SPIFFE ID and thus the trust domain; the matching bundle is selected from
 // roots.SPIFFEBundles. This removes the compile-time coupling to sns45.dev.
-func verifyX509(raw []byte, _ core.ImageRef, roots core.TrustRoots) IdentityResult {
+func verifyX509(raw []byte, _ core.ArtifactRef, roots core.TrustRoots) IdentityResult {
 	// Parse the PEM-encoded cert chain from id.Raw.
 	certs, err := parsePEMCerts(raw)
 	if err != nil {
