@@ -73,7 +73,7 @@ type blobBundle struct {
 // signature failure yields Verified:false with a non-empty Err. Available is
 // true on every path where the verifier ran (including error paths); it is
 // never false here because the native verifier is always able to run.
-func VerifyBlobBundle(bundle []byte, artifactDigest string, roots core.TrustRoots) SignatureResult {
+func VerifyBlobBundle(bundleBytes []byte, artifactDigest string, roots core.TrustRoots) SignatureResult {
 	// 1. Parse and validate the artifact digest: require "sha256:<hex>".
 	alg, hexStr, ok := strings.Cut(artifactDigest, ":")
 	if !ok || alg != "sha256" || hexStr == "" {
@@ -87,7 +87,7 @@ func VerifyBlobBundle(bundle []byte, artifactDigest string, roots core.TrustRoot
 	// 2. Parse the bundle and locate the messageSignature. A bundle with a
 	//    dsseEnvelope and no messageSignature is not a blob bundle.
 	var b blobBundle
-	if err := json.Unmarshal(bundle, &b); err != nil {
+	if err := json.Unmarshal(bundleBytes, &b); err != nil {
 		return SignatureResult{Available: true, Verified: false, Err: fmt.Sprintf("blob: parse bundle: %v", err)}
 	}
 	msgSig := b.MessageSignature
@@ -108,7 +108,7 @@ func VerifyBlobBundle(bundle []byte, artifactDigest string, roots core.TrustRoot
 	}
 
 	// 4. KEYLESS: bind the messageSignature to the artifact digest via sigstore-go.
-	return verifyKeylessBlob(bundle, digestBytes, roots)
+	return verifyKeylessBlob(bundleBytes, digestBytes, roots)
 }
 
 // verifyKeyedBlob verifies a keyed (self-signed-CA) messageSignature bundle
