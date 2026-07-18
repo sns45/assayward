@@ -24,6 +24,7 @@ type evalInputs struct {
 	Image           string
 	SigstoreRoot    string
 	SignatureCA     string // --signature-ca: path to PEM CA bundle for keyed (self-signed-CA) verification
+	SignedBlob      string // --signed-blob: path to a Sigstore messageSignature bundle over the release artifact
 	SPIFFEBundles   []string
 	SVID            string
 	SVIDType        string
@@ -45,6 +46,7 @@ func registerEvalFlags(cmd *cobra.Command, o *evalInputs) {
 	cmd.Flags().StringVar(&o.Image, "image", "", "image ref as name@sha256:<hex> (required)")
 	cmd.Flags().StringVar(&o.SigstoreRoot, "sigstore-trust-root", "", "path to a Sigstore trusted-root JSON")
 	cmd.Flags().StringVar(&o.SignatureCA, "signature-ca", "", "path to PEM CA bundle for keyed (self-signed-CA) Sigstore bundle verification")
+	cmd.Flags().StringVar(&o.SignedBlob, "signed-blob", "", "path to a Sigstore messageSignature bundle over the release artifact")
 	cmd.Flags().StringArrayVar(&o.SPIFFEBundles, "spiffe-bundle", nil, "trustDomain=path entries (repeatable)")
 	cmd.Flags().StringVar(&o.SVID, "svid", "", "path to SVID credential (JWT token or PEM X.509)")
 	cmd.Flags().StringVar(&o.SVIDType, "svid-type", "auto", "jwt|x509|auto")
@@ -137,11 +139,12 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 	// Require at least one attestation source so that a mis-configured invocation
 	// fails fast with exit 2 rather than silently producing a "deny" decision with
 	// no evidence. Auto-discovery (inferring --from-oci from --image) is a future
-	// refinement; v0.1 requires an explicit --bundle, --from-oci, or --forgeseal-output.
-	if len(o.Bundles) == 0 && o.FromOCI == "" && o.ForgesealOutput == "" {
+	// refinement; v0.1 requires an explicit --bundle, --from-oci, --forgeseal-output,
+	// or --signed-blob (a signature-only run with no attestations is valid).
+	if len(o.Bundles) == 0 && o.FromOCI == "" && o.ForgesealOutput == "" && o.SignedBlob == "" {
 		return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
 			Code: ExitError,
-			Msg:  fmt.Sprintf("%s: at least one attestation source is required: supply --bundle, --from-oci, or --forgeseal-output", cmdName),
+			Msg:  fmt.Sprintf("%s: at least one attestation source is required: supply --bundle, --from-oci, --forgeseal-output, or --signed-blob", cmdName),
 		}
 	}
 
@@ -188,6 +191,25 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 		}
 	}
 
+	// --signed-blob attaches a standalone Sigstore messageSignature bundle over
+	// the release artifact (bound to imageRef.Digest), independent of whichever
+	// branch above assembled ev's attestations. A run with only --signed-blob
+	// (no --bundle/--from-oci/--forgeseal-output) is valid: ev.Attestations is
+	// empty and the engine folds this signature alone into the signature verdict.
+	if o.SignedBlob != "" {
+		raw, err := os.ReadFile(o.SignedBlob)
+		if err != nil {
+			return core.Evidence{}, policy.Policy{}, core.TrustRoots{}, &CLIError{
+				Code: ExitError,
+				Msg:  fmt.Sprintf("%s: read --signed-blob: %v", cmdName, err),
+			}
+		}
+		ev.BlobSignature = &core.BlobSignature{
+			Bundle:         raw,
+			ArtifactDigest: imageRef.Digest,
+		}
+	}
+
 	if o.SVID != "" {
 		raw, err := os.ReadFile(o.SVID)
 		if err != nil {
@@ -228,6 +250,14 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 			}
 		}
 		roots.SignatureCAs = raw
+	} else if o.ForgesealOutput != "" {
+		// An explicit --signature-ca always wins; only auto-detect the forgeseal
+		// signing CA when the flag was left empty. A detect error is non-fatal —
+		// the absence of an auto-discovered CA must not break a run, so fall
+		// through with no CA rather than fail the whole invocation.
+		if ca, err := forgeseal.DetectSigningCA(o.ForgesealOutput); err == nil && ca != nil {
+			roots.SignatureCAs = ca
+		}
 	}
 
 	if len(o.SPIFFEBundles) > 0 {

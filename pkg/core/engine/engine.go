@@ -53,6 +53,22 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 		}
 	}
 
+	// Fold a standalone blob signature (e.g. --signed-blob over a release
+	// artifact) into the same sigView, after attestation aggregation so a
+	// verified attestation's identity always wins (deterministic ordering).
+	if ev.BlobSignature != nil {
+		r := verify.VerifyBlobBundle(ev.BlobSignature.Bundle, ev.BlobSignature.ArtifactDigest, roots)
+		if r.Available {
+			sigView.Available = true
+		}
+		if r.Verified && !sigView.Verified {
+			sigView.Verified = true
+			sigView.Issuer = r.Issuer
+			sigView.SubjectIdentity = r.SubjectIdentity
+			sigView.RekorLogged = r.RekorLogged
+		}
+	}
+
 	// -------------------------------------------------------------------------
 	// Step 2: Predicate routing via DSSE decoding.
 	// Route by predicateType: contains "slsa.dev/provenance" -> SLSA;
