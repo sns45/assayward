@@ -38,6 +38,7 @@
 package forgeseal
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -125,10 +126,12 @@ func EvidenceFromOutput(dir string, artifactDigest string) (core.Evidence, error
 //     dsseEnvelope is a top-level field (sibling of mediaType and
 //     verificationMaterial), not wrapped in a content object.
 type sigstoreBundle struct {
-	MediaType    string          `json:"mediaType"`
-	DSSEEnvelope json.RawMessage `json:"dsseEnvelope"` // canonical top-level (keyless)
-	Content      struct {
-		DSSEEnvelope json.RawMessage `json:"dsseEnvelope"` // forgeseal keyed shape
+	MediaType        string          `json:"mediaType"`
+	DSSEEnvelope     json.RawMessage `json:"dsseEnvelope"`     // canonical top-level (keyless)
+	MessageSignature json.RawMessage `json:"messageSignature"` // canonical top-level blob signature
+	Content          struct {
+		DSSEEnvelope     json.RawMessage `json:"dsseEnvelope"`     // forgeseal keyed shape
+		MessageSignature json.RawMessage `json:"messageSignature"` // forgeseal keyed blob signature
 	} `json:"content"`
 }
 
@@ -143,6 +146,14 @@ func bundleDSSEEnvelope(b sigstoreBundle) json.RawMessage {
 		return b.Content.DSSEEnvelope
 	}
 	return nil
+}
+
+// bundleHasMessageSignature reports whether b carries a Sigstore
+// messageSignature (used for detached "blob" signing rather than in-toto
+// attestation), accepting both the canonical top-level shape and the
+// forgeseal keyed shape.
+func bundleHasMessageSignature(b sigstoreBundle) bool {
+	return len(b.MessageSignature) > 0 || len(b.Content.MessageSignature) > 0
 }
 
 // dsseEnvelopeWire is the bare DSSE envelope wire format consumed by DecodeDSSE.
@@ -266,4 +277,106 @@ func wrapStatementInDSSE(stmtBytes []byte, payloadType string) ([]byte, error) {
 		Signatures:  json.RawMessage("[]"),
 	}
 	return json.Marshal(env)
+}
+
+// forgesealKind classifies a forgeseal output file by its JSON content
+// (rather than its filename), so callers can discover forgeseal artifacts
+// under arbitrary directory layouts.
+type forgesealKind int
+
+const (
+	kindOther         forgesealKind = iota
+	kindSBOM                        // CycloneDX SBOM document
+	kindVEX                         // OpenVEX document
+	kindSLSABundle                  // Sigstore bundle whose DSSE payload is a SLSA provenance
+	kindSLSAStatement               // raw in-toto SLSA statement (unsigned fallback)
+	kindBlobSig                     // Sigstore messageSignature bundle (not attached)
+)
+
+// classifyForgesealFile inspects the JSON content of b and returns the
+// forgesealKind it represents. Unrecognized or non-JSON content is
+// classified as kindOther.
+func classifyForgesealFile(b []byte) forgesealKind {
+	var probe struct {
+		BomFormat     string          `json:"bomFormat"`
+		Context       json.RawMessage `json:"@context"`
+		Type          string          `json:"_type"`
+		PredicateType string          `json:"predicateType"`
+	}
+	_ = json.Unmarshal(b, &probe)
+	switch {
+	case probe.BomFormat == "CycloneDX":
+		return kindSBOM
+	case len(probe.Context) > 0 && bytes.Contains(probe.Context, []byte("openvex.dev")):
+		return kindVEX
+	case strings.Contains(probe.Type, "in-toto.io/Statement") && strings.Contains(probe.PredicateType, "slsa.dev/provenance"):
+		return kindSLSAStatement
+	}
+
+	// Structural Sigstore bundle detection: neither bomFormat, @context, nor
+	// _type/predicateType matched, so probe for a DSSE envelope or a detached
+	// message signature.
+	var bundle sigstoreBundle
+	if err := json.Unmarshal(b, &bundle); err == nil {
+		if env := bundleDSSEEnvelope(bundle); env != nil {
+			if predicateTypeOfDSSE(env) == "slsa" {
+				return kindSLSABundle
+			}
+			return kindOther
+		}
+		if bundleHasMessageSignature(bundle) {
+			return kindBlobSig
+		}
+	}
+	return kindOther
+}
+
+// predicateTypeOfDSSE decodes the DSSE envelope env, base64-decodes its
+// payload, and reads the predicateType of the embedded in-toto Statement,
+// returning a coarse category label ("slsa" for SLSA provenance predicates,
+// "" for anything else or on any decode failure).
+func predicateTypeOfDSSE(env json.RawMessage) string {
+	var wire dsseEnvelopeWire
+	if err := json.Unmarshal(env, &wire); err != nil {
+		return ""
+	}
+	payload, err := base64.StdEncoding.DecodeString(wire.Payload)
+	if err != nil {
+		return ""
+	}
+	var stmt struct {
+		PredicateType string `json:"predicateType"`
+	}
+	if err := json.Unmarshal(payload, &stmt); err != nil {
+		return ""
+	}
+	if strings.Contains(stmt.PredicateType, "slsa.dev/provenance") {
+		return "slsa"
+	}
+	return ""
+}
+
+// DetectSigningCA scans dir for the first file whose contents contain a PEM
+// CERTIFICATE block and returns its raw bytes. It returns (nil, nil) when no
+// file in dir contains a certificate, and propagates any error from reading
+// the directory itself. Errors reading individual files are skipped over
+// (best-effort scan).
+func DetectSigningCA(dir string) ([]byte, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(b, []byte("-----BEGIN CERTIFICATE-----")) {
+			return b, nil
+		}
+	}
+	return nil, nil
 }
