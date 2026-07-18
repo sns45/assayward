@@ -53,6 +53,39 @@ func TestClassifyBlobSignatureBundle(t *testing.T) {
 	}
 }
 
+// TestClassifyExplicitNullFields guards against a real misclassification
+// path: json.RawMessage of an explicit JSON null unmarshals to the non-empty
+// bytes "null" (length 4), so a naive len(v) > 0 presence check treats an
+// explicit null the same as a populated field. Go structs marshaled without
+// omitempty (including forgeseal's own output in some code paths) can emit
+// exactly these explicit-null shapes.
+func TestClassifyExplicitNullFields(t *testing.T) {
+	// A null messageSignature (and no dsseEnvelope) must NOT be classified as
+	// a blob signature: there is no signature here, only an explicit null.
+	nullMessageSig := `{"mediaType":"x","messageSignature":null}`
+	if got := classifyForgesealFile([]byte(nullMessageSig)); got != kindOther {
+		t.Errorf("classify null messageSignature = %v, want kindOther", got)
+	}
+
+	// A null dsseEnvelope alongside a real messageSignature must fall through
+	// to the blob-signature branch: the DSSE null must be ignored rather than
+	// short-circuiting classification (and, critically, must not cause the
+	// DSSE branch to always return before the real messageSignature is ever
+	// inspected).
+	nullDSSEWithRealSig := `{"dsseEnvelope":null,"messageSignature":{"signature":"abc"}}`
+	if got := classifyForgesealFile([]byte(nullDSSEWithRealSig)); got != kindBlobSig {
+		t.Errorf("classify null dsseEnvelope + real messageSignature = %v, want kindBlobSig", got)
+	}
+}
+
+// TestClassifyNonJSONGarbage confirms non-JSON input classifies as kindOther
+// without panicking.
+func TestClassifyNonJSONGarbage(t *testing.T) {
+	if got := classifyForgesealFile([]byte("not json")); got != kindOther {
+		t.Errorf("classify non-JSON garbage = %v, want kindOther", got)
+	}
+}
+
 func TestDetectSigningCA(t *testing.T) {
 	dir := t.TempDir()
 	pem := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"

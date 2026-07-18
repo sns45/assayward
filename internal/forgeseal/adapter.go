@@ -135,14 +135,24 @@ type sigstoreBundle struct {
 	} `json:"content"`
 }
 
+// rawPresent reports whether a json.RawMessage carries a real value, not
+// absent and not an explicit JSON null (RawMessage of null is the 4 bytes
+// "null"). A struct field of type json.RawMessage that is simply missing from
+// the source document unmarshals to a nil/zero-length slice, but a field that
+// is present with an explicit JSON null value unmarshals to the non-empty
+// bytes "null" — the two are otherwise indistinguishable via len(v) > 0 alone.
+func rawPresent(v json.RawMessage) bool {
+	return len(v) > 0 && !bytes.Equal(bytes.TrimSpace(v), []byte("null"))
+}
+
 // bundleDSSEEnvelope returns the raw DSSE envelope bytes from a sigstoreBundle,
 // accepting both the canonical top-level shape and the forgeseal keyed shape.
-// Returns nil when neither field is populated.
+// Returns nil when neither field is populated (absent or explicit JSON null).
 func bundleDSSEEnvelope(b sigstoreBundle) json.RawMessage {
-	if len(b.DSSEEnvelope) > 0 {
+	if rawPresent(b.DSSEEnvelope) {
 		return b.DSSEEnvelope
 	}
-	if len(b.Content.DSSEEnvelope) > 0 {
+	if rawPresent(b.Content.DSSEEnvelope) {
 		return b.Content.DSSEEnvelope
 	}
 	return nil
@@ -151,9 +161,10 @@ func bundleDSSEEnvelope(b sigstoreBundle) json.RawMessage {
 // bundleHasMessageSignature reports whether b carries a Sigstore
 // messageSignature (used for detached "blob" signing rather than in-toto
 // attestation), accepting both the canonical top-level shape and the
-// forgeseal keyed shape.
+// forgeseal keyed shape. A field that is present but set to an explicit JSON
+// null does not count as a signature.
 func bundleHasMessageSignature(b sigstoreBundle) bool {
-	return len(b.MessageSignature) > 0 || len(b.Content.MessageSignature) > 0
+	return rawPresent(b.MessageSignature) || rawPresent(b.Content.MessageSignature)
 }
 
 // dsseEnvelopeWire is the bare DSSE envelope wire format consumed by DecodeDSSE.
