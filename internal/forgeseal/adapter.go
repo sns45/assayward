@@ -17,28 +17,33 @@
 //     each one into a synthetic in-toto Statement v1 (using the artifact
 //     digest as the subject) and then into a bare DSSE envelope (payloadType
 //     = application/vnd.in-toto+json, payload = base64(statement),
-//     signatures = []). The signatures slice is deliberately empty: these are
-//     raw artifacts and the dogfood policy does not require cryptographic
-//     signatures (see gap note below). A missing VEX document is a soft
-//     skip, not an error.
+//     signatures = []). The signatures slice on these synthetic wraps is
+//     deliberately empty: the raw SBOM/VEX documents are not themselves
+//     signed by forgeseal, so no signature is asserted for them. A missing
+//     VEX document is a soft skip, not an error.
 //
-// # Signature-stub gap (honest M6 state)
+// # Signature model: keyed (self-signed-CA), verified
 //
-// forgeseal's Sigstore signing is STUBBED in the current release: the
-// slsa.sigstore-bundle.json contains NO Fulcio certificate chain and NO Rekor
-// transparency-log entry (verificationMaterial is absent). Consequently
-// assayward's sigstore-go verifier CANNOT cryptographically verify the bundle.
+// forgeseal's default `pipeline --sign` mode is KEYED: it signs the SLSA
+// provenance with a leaf certificate issued by a local self-signed CA and
+// exports that CA as forgeseal-signing-ca.crt. The emitted Sigstore bundle
+// therefore carries a real verificationMaterial.certificate and NO Rekor
+// transparency-log entry. assayward's keyed path (verify.VerifyKeyedBundle for
+// the DSSE SLSA bundle, verify.VerifyBlobBundle for a standalone messageSignature
+// blob) DOES cryptographically verify these bundles: it chains the leaf to the
+// CA supplied in TrustRoots.SignatureCAs and checks the signature. The CA is
+// supplied either explicitly via --signature-ca or auto-detected from
+// forgeseal-signing-ca.crt in the output directory (see DetectSigningCA).
 //
-// The dogfood policy (testdata/dogfood/policy-dogfood.yaml) therefore sets
-// signature.required: false and relies instead on:
-//   - SLSA provenance (level 3, builder https://forgeseal.dev/cli)
-//   - SBOM presence
-//   - VEX not_affected status
-//   - svidmint publisher JWT-SVID for workload identity binding
+// Trust caveat: auto-detecting the CA from the same directory that holds the
+// signature proves internal consistency, not trust in a pinned anchor — anyone
+// who controls the output directory controls both. Pin --signature-ca to a
+// trusted CA in production; auto-detection is for the dogfood/self-attesting
+// path. Verification is always fail-closed: a bundle is never treated as
+// verified without a real chain + signature check.
 //
-// Full Sigstore-keyless + forgeseal-verified signing is a tracked gap to be
-// resolved in a future milestone once forgeseal integrates a real Fulcio CA
-// and Rekor instance.
+// Keyless (Fulcio + Rekor) signing is a separate, not-yet-exercised path;
+// this adapter verifies whatever forgeseal actually emits, keyed today.
 package forgeseal
 
 import (
