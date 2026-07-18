@@ -147,7 +147,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	// -------------------------------------------------------------------------
 	// Step 5: Evaluate policy and build Decision.
 	// -------------------------------------------------------------------------
-	result, reasons := policy.EvaluatePolicy(pol, sigView, slsaView, sbomView, vexView, idView)
+	result, reasons := policy.EvaluatePolicy(pol, sigView, slsaView, sbomView, vexView, idView, ev.Findings)
 
 	// Guarantee non-nil slice so JSON marshals to [] not null.
 	if reasons == nil {

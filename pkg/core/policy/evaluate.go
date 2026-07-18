@@ -85,6 +85,7 @@ func EvaluatePolicy(
 	sbom SBOMView,
 	vex VEXView,
 	id IdentityView,
+	findings []core.Finding,
 ) (core.Result, []core.Reason) {
 
 	var reasons []core.Reason
@@ -374,6 +375,11 @@ func EvaluatePolicy(
 	}
 
 	// -----------------------------------------------------------------------
+	// Findings checks
+	// -----------------------------------------------------------------------
+	reasons = append(reasons, evaluateFindings(pol.Findings, findings)...)
+
+	// -----------------------------------------------------------------------
 	// Sort reasons by Code for deterministic output.
 	// -----------------------------------------------------------------------
 	sort.SliceStable(reasons, func(i, j int) bool {
@@ -410,6 +416,45 @@ func EvaluatePolicy(
 		}
 		return core.ResultAllow, reasons
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Findings evaluation
+// ---------------------------------------------------------------------------
+
+var severityRank = map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+// evaluateFindings returns reasons for a configured FindingsRule. An empty rule
+// (no forbidden codes and no max severity) returns nil: findings are carried
+// but never gate.
+func evaluateFindings(rule FindingsRule, findings []core.Finding) []core.Reason {
+	if len(rule.ForbiddenCodes) == 0 && rule.MaxSeverity == "" {
+		return nil
+	}
+	forbidden := map[string]bool{}
+	for _, c := range rule.ForbiddenCodes {
+		forbidden[c] = true
+	}
+	var reasons []core.Reason
+	violated := false
+	max := severityRank[strings.ToLower(rule.MaxSeverity)]
+	for _, f := range findings {
+		if forbidden[f.Code] {
+			violated = true
+			reasons = append(reasons, core.Reason{Code: "FINDINGS_FORBIDDEN_CODE_PRESENT", Severity: f.Severity, Met: false,
+				Detail: "finding " + f.Code + " is forbidden by policy"})
+		}
+		if max > 0 && severityRank[strings.ToLower(string(f.Severity))] > max {
+			violated = true
+			reasons = append(reasons, core.Reason{Code: "FINDINGS_SEVERITY_EXCEEDED", Severity: f.Severity, Met: false,
+				Detail: "finding " + f.Code + " severity exceeds " + rule.MaxSeverity})
+		}
+	}
+	if !violated {
+		reasons = append(reasons, core.Reason{Code: "FINDINGS_WITHIN_POLICY", Severity: core.SeverityLow, Met: true,
+			Detail: "no finding violates the findings policy"})
+	}
+	return reasons
 }
 
 // ---------------------------------------------------------------------------

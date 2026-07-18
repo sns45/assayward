@@ -41,7 +41,7 @@ func TestSignatureVerificationUnavailable(t *testing.T) {
 	pol.Signature.Required = true
 
 	sig := policy.SignatureResultView{Available: false, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -64,7 +64,7 @@ func TestSignatureRequiredMissing(t *testing.T) {
 	pol.Signature.Required = true
 
 	sig := policy.SignatureResultView{Available: true, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -101,7 +101,7 @@ func TestSignatureIdentityMismatch(t *testing.T) {
 		SubjectIdentity: "https://github.com/sns45/repo/.github/workflows/x.yml@refs/heads/main",
 		RekorLogged:     true,
 	}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -131,7 +131,7 @@ func TestSignatureIdentityPatternMatch(t *testing.T) {
 		SubjectIdentity: "https://github.com/sns45/repo/.github/workflows/x.yml@refs/heads/main",
 		RekorLogged:     false,
 	}
-	_, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	_, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	r, ok := findReason(reasons, "SIGNATURE_IDENTITY_MISMATCH")
 	if ok && !r.Met {
@@ -145,7 +145,7 @@ func TestRekorRequiredMissing(t *testing.T) {
 	pol.Signature.Rekor.Required = true
 
 	sig := policy.SignatureResultView{Available: true, Verified: true, RekorLogged: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -165,7 +165,7 @@ func TestSLSALevelBelowThreshold(t *testing.T) {
 	pol.SLSA.MinLevel = 3
 
 	slsa := policy.SLSAView{Verified: true, BuildLevel: 2, SubjectDigestMatch: true}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -188,7 +188,7 @@ func TestSLSABuilderNotAllowed(t *testing.T) {
 	pol.SLSA.AllowedBuilders = []string{"https://github.com/slsa-framework/slsa-github-generator/*"}
 
 	slsa := policy.SLSAView{Verified: true, BuilderID: "https://evil.builder.io/bad", BuildLevel: 3, SubjectDigestMatch: true}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -208,7 +208,7 @@ func TestSubjectDigestMismatch(t *testing.T) {
 	pol.SLSA.MinLevel = 2
 
 	slsa := policy.SLSAView{Verified: true, BuildLevel: 3, SubjectDigestMatch: false}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -231,7 +231,7 @@ func TestSubjectDigestMismatchNotFiredWhenSLSANotInScope(t *testing.T) {
 	// SLSA not configured
 
 	slsa := policy.SLSAView{Verified: false, BuildLevel: 0, SubjectDigestMatch: false}
-	_, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	_, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if hasCode(reasons, "SUBJECT_DIGEST_MISMATCH") {
 		t.Error("SUBJECT_DIGEST_MISMATCH should not fire when SLSA not in scope")
@@ -244,7 +244,7 @@ func TestVEXUnmitigatedCritical(t *testing.T) {
 	pol.VEX.MaxUnmitigatedSeverity = "critical"
 
 	vex := policy.VEXView{Present: true, AffectedCVEs: []string{"CVE-2024-1234"}}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, vex, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, vex, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -267,7 +267,7 @@ func TestVEXUnmitigatedNotFiredWhenNoAffected(t *testing.T) {
 	pol.VEX.MaxUnmitigatedSeverity = "critical"
 
 	vex := policy.VEXView{Present: true, AffectedCVEs: nil}
-	result, _ := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, vex, policy.IdentityView{})
+	result, _ := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, vex, policy.IdentityView{}, nil)
 
 	if result != core.ResultAllow {
 		t.Errorf("expected ResultAllow, got %q", result)
@@ -280,7 +280,7 @@ func TestSBOMRequiredMissing(t *testing.T) {
 	pol.SBOM.Required = true
 
 	sbom := policy.SBOMView{Present: false}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, sbom, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, sbom, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -303,7 +303,7 @@ func TestSBOMDisallowedLicense(t *testing.T) {
 	pol.SBOM.DisallowedLicenses = []string{"GPL-3.0", "AGPL-3.0"}
 
 	sbom := policy.SBOMView{Present: true, Licenses: []string{"MIT", "GPL-3.0"}}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, sbom, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, sbom, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -326,7 +326,7 @@ func TestSBOMAllLicensesAllowed(t *testing.T) {
 	pol.SBOM.DisallowedLicenses = []string{"GPL-3.0"}
 
 	sbom := policy.SBOMView{Present: true, Licenses: []string{"MIT", "Apache-2.0"}}
-	result, _ := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, sbom, policy.VEXView{}, policy.IdentityView{})
+	result, _ := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, sbom, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultAllow {
 		t.Errorf("expected ResultAllow, got %q", result)
@@ -339,7 +339,7 @@ func TestIdentityRequiredMissing(t *testing.T) {
 	pol.Identity.Required = true
 
 	id := policy.IdentityView{Present: false, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id)
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -366,7 +366,7 @@ func TestIdentityTrustDomainMismatch(t *testing.T) {
 		SPIFFEID:     "spiffe://evil.com/service",
 		BindingMatch: true,
 	}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id)
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -394,7 +394,7 @@ func TestIdentityIDPatternMismatch(t *testing.T) {
 		SPIFFEID:     "spiffe://example.com/disallowed/service",
 		BindingMatch: true,
 	}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id)
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -420,7 +420,7 @@ func TestIdentityBindingMismatch(t *testing.T) {
 		SPIFFEID:     "spiffe://example.com/service",
 		BindingMatch: false,
 	}
-	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id)
+	result, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, id, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -475,7 +475,7 @@ func TestAllPassAllow(t *testing.T) {
 		BindingMatch: true,
 	}
 
-	result, reasons := policy.EvaluatePolicy(pol, sig, slsa, sbom, vex, id)
+	result, reasons := policy.EvaluatePolicy(pol, sig, slsa, sbom, vex, id, nil)
 
 	if result != core.ResultAllow {
 		t.Errorf("expected ResultAllow, got %q", result)
@@ -494,7 +494,7 @@ func TestAuditModeAllowsOnFailure(t *testing.T) {
 	pol.Signature.Required = true
 
 	sig := policy.SignatureResultView{Available: true, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultAudit {
 		t.Errorf("audit mode: expected ResultAudit, got %q", result)
@@ -515,7 +515,7 @@ func TestWarnModeAllowsOnFailure(t *testing.T) {
 	pol.Signature.Required = true
 
 	sig := policy.SignatureResultView{Available: true, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	// Finding 6: assert ResultAllow explicitly so a future result-enum change is caught.
 	if result != core.ResultAllow {
@@ -539,7 +539,7 @@ func TestRekorOnlyUnavailableIsFailClosed(t *testing.T) {
 	pol.Signature.Rekor.Required = true // but Rekor log is required
 
 	sig := policy.SignatureResultView{Available: false, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	// Must deny (fail-closed); the verifier could not run so Rekor cannot be checked.
 	if result != core.ResultDeny {
@@ -571,7 +571,7 @@ func TestSigAndRekorBothUnavailable(t *testing.T) {
 	pol.Signature.Rekor.Required = true
 
 	sig := policy.SignatureResultView{Available: false, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -599,7 +599,7 @@ func TestKeylessUnavailableNoIdentityMismatch(t *testing.T) {
 	}
 
 	sig := policy.SignatureResultView{Available: false, Verified: false}
-	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	result, reasons := policy.EvaluatePolicy(pol, sig, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if result != core.ResultDeny {
 		t.Errorf("expected ResultDeny, got %q", result)
@@ -625,7 +625,7 @@ func TestReasonsAreSortedByCode(t *testing.T) {
 	slsa := policy.SLSAView{Verified: true, BuildLevel: 1, SubjectDigestMatch: true}
 	id := policy.IdentityView{Present: false}
 
-	_, reasons := policy.EvaluatePolicy(pol, sig, slsa, policy.SBOMView{}, policy.VEXView{}, id)
+	_, reasons := policy.EvaluatePolicy(pol, sig, slsa, policy.SBOMView{}, policy.VEXView{}, id, nil)
 
 	if !sort.SliceIsSorted(reasons, func(i, j int) bool {
 		return reasons[i].Code < reasons[j].Code
@@ -643,7 +643,7 @@ func TestNoChecksEmittedForUnconfiguredPolicy(t *testing.T) {
 	pol := minPol(policy.ModeEnforce)
 	// Nothing configured
 
-	_, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	_, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, policy.SLSAView{}, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	if len(reasons) != 0 {
 		t.Errorf("expected no reasons for unconfigured policy, got %d: %v", len(reasons), reasons)
@@ -661,7 +661,7 @@ func TestSLSABuilderAllowedByGlob(t *testing.T) {
 		BuildLevel:         3,
 		SubjectDigestMatch: true,
 	}
-	_, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{})
+	_, reasons := policy.EvaluatePolicy(pol, policy.SignatureResultView{}, slsa, policy.SBOMView{}, policy.VEXView{}, policy.IdentityView{}, nil)
 
 	r, ok := findReason(reasons, "SLSA_BUILDER_NOT_ALLOWED")
 	if ok && !r.Met {

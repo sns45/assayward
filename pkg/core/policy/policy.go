@@ -32,6 +32,7 @@ type Policy struct {
 	VEX        VEXRule
 	SBOM       SBOMRule
 	Identity   IdentityRule
+	Findings   FindingsRule
 }
 
 // SignatureRule controls image signature requirements.
@@ -76,6 +77,12 @@ type IdentityRule struct {
 	IDPattern   string
 }
 
+// FindingsRule controls policy gating over Evidence.Findings.
+type FindingsRule struct {
+	ForbiddenCodes []string
+	MaxSeverity    string // "" disables the severity gate
+}
+
 // ---------------------------------------------------------------------------
 // Wire types — the nested YAML structure on disk.
 // These are private; only Parse exposes a Policy to callers.
@@ -100,6 +107,7 @@ type wireSpec struct {
 	VEX       wireVEXRule       `yaml:"vex"`
 	SBOM      wireSBOMRule      `yaml:"sbom"`
 	Identity  wireIdentityRule  `yaml:"identity"`
+	Findings  wireFindingsRule  `yaml:"findings"`
 }
 
 type wireSignatureRule struct {
@@ -135,6 +143,11 @@ type wireIdentityRule struct {
 	Required    bool   `yaml:"required"`
 	TrustDomain string `yaml:"trustDomain"`
 	IDPattern   string `yaml:"idPattern"`
+}
+
+type wireFindingsRule struct {
+	ForbiddenCodes []string `yaml:"forbiddenCodes"`
+	MaxSeverity    string   `yaml:"maxSeverity"`
 }
 
 // Parse decodes a TrustPolicy YAML document into a Policy.
@@ -209,6 +222,10 @@ func Parse(b []byte) (Policy, error) {
 			Required:    w.Spec.Identity.Required,
 			TrustDomain: w.Spec.Identity.TrustDomain,
 			IDPattern:   w.Spec.Identity.IDPattern,
+		},
+		Findings: FindingsRule{
+			ForbiddenCodes: w.Spec.Findings.ForbiddenCodes,
+			MaxSeverity:    w.Spec.Findings.MaxSeverity,
 		},
 	}
 
