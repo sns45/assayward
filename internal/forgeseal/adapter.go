@@ -1,22 +1,26 @@
 // Package forgeseal provides an adapter that reads forgeseal's native output
 // directory and assembles a core.Evidence value for assayward policy evaluation.
 //
-// # Adapter design: raw-to-DSSE wrapping
+// # Adapter design: content discovery + raw-to-DSSE wrapping
 //
+// Output files are discovered by CONTENT (classifyForgesealFile), not by a
+// fixed filename, so forgeseal artifacts under arbitrary filenames are found.
 // forgeseal emits three categories of artifact:
 //
-//  1. slsa.sigstore-bundle.json — a Sigstore bundle containing a dsseEnvelope
-//     with the SLSA in-toto Statement inside. The dsseEnvelope is already a
-//     valid bare DSSE envelope; EvidenceFromOutput extracts it from the bundle
-//     wrapper and passes it directly to core.Attestation.Envelope.
+//  1. A Sigstore bundle containing a dsseEnvelope with the SLSA in-toto
+//     Statement inside (or, as a fallback, a raw unsigned SLSA statement).
+//     The dsseEnvelope/bundle is already a valid DSSE-shaped payload;
+//     EvidenceFromOutput passes it directly to core.Attestation.Envelope.
 //
-//  2. sbom.cdx.json and vex.openvex.json — RAW documents with no in-toto or
-//     DSSE wrapper. EvidenceFromOutput wraps each one into a synthetic in-toto
-//     Statement v1 (using the artifact digest as the subject) and then into a
-//     bare DSSE envelope (payloadType = application/vnd.in-toto+json, payload =
-//     base64(statement), signatures = []). The signatures slice is deliberately
-//     empty: these are raw artifacts and the dogfood policy does not require
-//     cryptographic signatures (see gap note below).
+//  2. An SBOM (CycloneDX) and, optionally, a VEX (OpenVEX) document — RAW
+//     documents with no in-toto or DSSE wrapper. EvidenceFromOutput wraps
+//     each one into a synthetic in-toto Statement v1 (using the artifact
+//     digest as the subject) and then into a bare DSSE envelope (payloadType
+//     = application/vnd.in-toto+json, payload = base64(statement),
+//     signatures = []). The signatures slice is deliberately empty: these are
+//     raw artifacts and the dogfood policy does not require cryptographic
+//     signatures (see gap note below). A missing VEX document is a soft
+//     skip, not an error.
 //
 // # Signature-stub gap (honest M6 state)
 //
@@ -53,66 +57,117 @@ import (
 // assembles a core.Evidence value. artifactDigest must be the sha256 digest of
 // the attested artifact in the form "sha256:<hex>".
 //
+// Unlike the original fixed-filename implementation, forgeseal output files
+// are discovered by CONTENT (via classifyForgesealFile), not by name: every
+// non-directory entry in dir is read and classified, so forgeseal artifacts
+// under arbitrary filenames or directory layouts are found. Attestations are
+// assembled in a FIXED order: SLSA first (a signed Sigstore bundle is
+// preferred over a raw statement fallback), then SBOM, then VEX. A missing
+// VEX document is a soft skip (no error); at least one of an SBOM or a SLSA
+// artifact (bundle or statement) must be present, or EvidenceFromOutput
+// returns an error naming dir.
+//
 // The caller is responsible for attaching Identity to the returned Evidence
 // before passing it to the engine; EvidenceFromOutput always returns
 // Evidence.Identity == nil.
-//
-// Errors are returned for any missing or malformed file in dir.
 func EvidenceFromOutput(dir string, artifactDigest string) (core.Evidence, error) {
-	// Strip "sha256:" prefix to get the hex portion used in statement subjects.
-	digestHex := strings.TrimPrefix(artifactDigest, "sha256:")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return core.Evidence{}, fmt.Errorf("forgeseal: read output dir %q: %w", dir, err)
+	}
+
+	var slsaBundle, slsaStmt, sbomRaw, vexRaw []byte
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			// Best-effort scan: skip files that can't be read.
+			continue
+		}
+		switch classifyForgesealFile(b) {
+		case kindSLSABundle:
+			slsaBundle = b
+		case kindSLSAStatement:
+			if slsaStmt == nil {
+				slsaStmt = b
+			}
+		case kindSBOM:
+			sbomRaw = b
+		case kindVEX:
+			vexRaw = b
+		}
+	}
+
+	if sbomRaw == nil && slsaBundle == nil && slsaStmt == nil {
+		return core.Evidence{}, fmt.Errorf("forgeseal: no SBOM or SLSA artifact found in %s", dir)
+	}
+
+	art := core.ImageRef{Name: "forgeseal-artifact", Digest: artifactDigest}.AsArtifact()
+	digestHex := art.Digest["sha256"]
 
 	ev := core.Evidence{
-		Artifact: core.ArtifactRef{
-			Kind:   "container",
-			Name:   "forgeseal-artifact",
-			Digest: core.DigestSet{"sha256": digestHex},
-		},
+		Artifact:      art,
 		SchemaVersion: core.EvidenceSchemaVersion,
 	}
 
 	// -------------------------------------------------------------------------
-	// 1. SLSA attestation: extract dsseEnvelope from the Sigstore bundle.
+	// 1. SLSA attestation: signed bundle preferred over raw statement fallback.
 	// -------------------------------------------------------------------------
-	slsaAtt, err := readSLSAAttestation(dir)
-	if err != nil {
-		return core.Evidence{}, fmt.Errorf("forgeseal: SLSA attestation: %w", err)
+	switch {
+	case slsaBundle != nil:
+		if err := validateSLSABundle(slsaBundle); err != nil {
+			return core.Evidence{}, fmt.Errorf("forgeseal: SLSA attestation: %w", err)
+		}
+		// Store the FULL bundle JSON as the Attestation Envelope so that:
+		//   - The signature verifier can access verificationMaterial.certificate
+		//     for keyed (self-signed-CA) DSSE signature verification.
+		//   - verify.DecodeDSSE transparently extracts content.dsseEnvelope for
+		//     predicate routing in the engine.
+		ev.Attestations = append(ev.Attestations, core.Attestation{
+			PredicateType: "https://slsa.dev/provenance/v1",
+			Envelope:      slsaBundle,
+		})
+	case slsaStmt != nil:
+		env, err := wrapStatementInDSSE(slsaStmt, "application/vnd.in-toto+json")
+		if err != nil {
+			return core.Evidence{}, fmt.Errorf("forgeseal: wrap SLSA statement: %w", err)
+		}
+		ev.Attestations = append(ev.Attestations, core.Attestation{
+			PredicateType: "https://slsa.dev/provenance/v1",
+			Envelope:      env,
+		})
 	}
-	ev.Attestations = append(ev.Attestations, slsaAtt)
 
 	// -------------------------------------------------------------------------
 	// 2. SBOM attestation: wrap raw CycloneDX BOM into in-toto + DSSE.
 	// -------------------------------------------------------------------------
-	sbomAtt, err := readAndWrapRaw(
-		filepath.Join(dir, "sbom.cdx.json"),
-		"forgeseal-artifact",
-		digestHex,
-		"https://cyclonedx.org/bom",
-	)
-	if err != nil {
-		return core.Evidence{}, fmt.Errorf("forgeseal: SBOM attestation: %w", err)
+	if sbomRaw != nil {
+		env, err := wrapRawStatement(sbomRaw, "forgeseal-artifact", digestHex, "https://cyclonedx.org/bom")
+		if err != nil {
+			return core.Evidence{}, fmt.Errorf("forgeseal: SBOM attestation: %w", err)
+		}
+		ev.Attestations = append(ev.Attestations, core.Attestation{
+			PredicateType: "https://cyclonedx.org/bom",
+			Envelope:      env,
+		})
 	}
-	ev.Attestations = append(ev.Attestations, core.Attestation{
-		PredicateType: "https://cyclonedx.org/bom",
-		Envelope:      sbomAtt,
-	})
 
 	// -------------------------------------------------------------------------
 	// 3. VEX attestation: wrap raw OpenVEX document into in-toto + DSSE.
+	//    A missing VEX document is a soft skip: no error.
 	// -------------------------------------------------------------------------
-	vexAtt, err := readAndWrapRaw(
-		filepath.Join(dir, "vex.openvex.json"),
-		"forgeseal-artifact",
-		digestHex,
-		"https://openvex.dev/ns/v0.2.0",
-	)
-	if err != nil {
-		return core.Evidence{}, fmt.Errorf("forgeseal: VEX attestation: %w", err)
+	if vexRaw != nil {
+		env, err := wrapRawStatement(vexRaw, "forgeseal-artifact", digestHex, "https://openvex.dev/ns/v0.2.0")
+		if err != nil {
+			return core.Evidence{}, fmt.Errorf("forgeseal: VEX attestation: %w", err)
+		}
+		ev.Attestations = append(ev.Attestations, core.Attestation{
+			PredicateType: "https://openvex.dev/ns/v0.2.0",
+			Envelope:      env,
+		})
 	}
-	ev.Attestations = append(ev.Attestations, core.Attestation{
-		PredicateType: "https://openvex.dev/ns/v0.2.0",
-		Envelope:      vexAtt,
-	})
 
 	return ev, nil
 }
@@ -174,56 +229,19 @@ type dsseEnvelopeWire struct {
 	Signatures  json.RawMessage `json:"signatures"`
 }
 
-// readSLSAAttestation reads slsa.sigstore-bundle.json from dir and returns it
-// as a core.Attestation whose Envelope contains the FULL Sigstore bundle JSON.
-//
-// Storing the full bundle (rather than only the extracted dsseEnvelope) allows
-// the signature verifier to access verificationMaterial.certificate for keyed
-// (self-signed-CA) verification. The engine's DSSE predicate routing handles
-// Sigstore bundle JSON transparently via verify.DecodeDSSE's bundle-aware path.
-//
-// If the bundle file is absent but slsa.intoto.jsonl is present, the raw
-// Statement is wrapped into a synthetic DSSE envelope instead (fallback path).
-func readSLSAAttestation(dir string) (core.Attestation, error) {
-	bundlePath := filepath.Join(dir, "slsa.sigstore-bundle.json")
-	rawPath := filepath.Join(dir, "slsa.intoto.jsonl")
-
-	bundleBytes, bundleErr := os.ReadFile(bundlePath)
-	if bundleErr != nil {
-		// Fallback: use the raw JSONL statement and wrap it.
-		rawBytes, rawErr := os.ReadFile(rawPath)
-		if rawErr != nil {
-			return core.Attestation{}, fmt.Errorf("read slsa.sigstore-bundle.json: %w; read slsa.intoto.jsonl: %v", bundleErr, rawErr)
-		}
-		env, err := wrapStatementInDSSE(rawBytes, "application/vnd.in-toto+json")
-		if err != nil {
-			return core.Attestation{}, fmt.Errorf("wrap SLSA statement: %w", err)
-		}
-		return core.Attestation{
-			PredicateType: "https://slsa.dev/provenance/v1",
-			Envelope:      env,
-		}, nil
-	}
-
-	// Validate the bundle is parseable JSON and contains a DSSE envelope in
-	// one of the two supported locations before storing.
+// validateSLSABundle checks that b parses as a sigstoreBundle and contains a
+// DSSE envelope in one of the two supported locations (top-level or
+// content.dsseEnvelope), before the caller carries the full bundle bytes as
+// an Attestation Envelope.
+func validateSLSABundle(b []byte) error {
 	var bundle sigstoreBundle
-	if err := json.Unmarshal(bundleBytes, &bundle); err != nil {
-		return core.Attestation{}, fmt.Errorf("parse sigstore bundle: %w", err)
+	if err := json.Unmarshal(b, &bundle); err != nil {
+		return fmt.Errorf("parse sigstore bundle: %w", err)
 	}
 	if bundleDSSEEnvelope(bundle) == nil {
-		return core.Attestation{}, fmt.Errorf("sigstore bundle has no dsseEnvelope (checked top-level and content.dsseEnvelope)")
+		return fmt.Errorf("sigstore bundle has no dsseEnvelope (checked top-level and content.dsseEnvelope)")
 	}
-
-	// Store the FULL bundle JSON as the Attestation Envelope so that:
-	//   - The signature verifier can access verificationMaterial.certificate
-	//     for keyed (self-signed-CA) DSSE signature verification.
-	//   - verify.DecodeDSSE transparently extracts content.dsseEnvelope for
-	//     predicate routing in the engine.
-	return core.Attestation{
-		PredicateType: "https://slsa.dev/provenance/v1",
-		Envelope:      bundleBytes,
-	}, nil
+	return nil
 }
 
 // inTotoStatement is the minimal in-toto Statement v1 structure used for
@@ -241,21 +259,17 @@ type inTotoSubj struct {
 	Digest map[string]string `json:"digest"`
 }
 
-// readAndWrapRaw reads a raw artifact at path, wraps it in an in-toto
-// Statement v1, and encodes the whole thing as a bare DSSE envelope.
+// wrapRawStatement wraps raw (an already-read raw artifact, e.g. an SBOM or
+// VEX document) in an in-toto Statement v1, and encodes the whole thing as a
+// bare DSSE envelope.
 //
 // The subject uses subjectName (e.g. "forgeseal-artifact") and digestHex
 // (the sha256 hex without the "sha256:" prefix). predicateType is embedded in
 // the statement.
-func readAndWrapRaw(path, subjectName, digestHex, predicateType string) ([]byte, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", path, err)
-	}
-
+func wrapRawStatement(raw []byte, subjectName, digestHex, predicateType string) ([]byte, error) {
 	// Validate that the raw bytes are well-formed JSON before embedding.
 	if !json.Valid(raw) {
-		return nil, fmt.Errorf("%q is not valid JSON", path)
+		return nil, fmt.Errorf("raw statement content is not valid JSON")
 	}
 
 	stmt := inTotoStatement{
