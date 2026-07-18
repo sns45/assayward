@@ -16,6 +16,9 @@
 # SDD scratch (ledger, briefs, reports)
 .superpowers/
 
+# Git worktrees (isolated per-task workspaces)
+.claude/worktrees/
+
 # npm surface
 surfaces/npm/node_modules/
 surfaces/npm/dist/
