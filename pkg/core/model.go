@@ -61,10 +61,13 @@ type BlobSignature struct {
 }
 
 type Evidence struct {
-	Image        ImageRef          `json:"image"`
-	Attestations []Attestation     `json:"attestations"`
-	Identity     *WorkloadIdentity `json:"identity,omitempty"`
-	FetchedAt    time.Time         `json:"fetchedAt"` // injected, not read from a clock
+	Artifact      ArtifactRef       `json:"artifact"`
+	Attestations  []Attestation     `json:"attestations"`
+	Identity      *WorkloadIdentity `json:"identity,omitempty"`
+	Findings      []Finding         `json:"findings,omitempty"`
+	BlobSignature *BlobSignature    `json:"blobSignature,omitempty"`
+	SchemaVersion string            `json:"schemaVersion"`
+	FetchedAt     time.Time         `json:"fetchedAt"` // injected, not read from a clock
 }
 
 type Attestation struct {
@@ -92,10 +95,10 @@ type Reason struct {
 }
 
 type EvidenceSummary struct {
-	Image            ImageRef `json:"image"`
-	AttestationTypes []string `json:"attestationTypes"`
-	IdentityPresent  bool     `json:"identityPresent"`
-	SPIFFEID         string   `json:"spiffeID,omitempty"`
+	Artifact         ArtifactRef `json:"artifact"`
+	AttestationTypes []string    `json:"attestationTypes"`
+	IdentityPresent  bool        `json:"identityPresent"`
+	SPIFFEID         string      `json:"spiffeID,omitempty"`
 }
 
 type Decision struct {
