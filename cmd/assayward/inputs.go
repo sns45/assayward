@@ -157,7 +157,7 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 			}
 		}
 		// Override image name from --image flag (adapter sets a placeholder name).
-		fsEv.Image.Name = imageRef.Name
+		fsEv.Artifact.Name = imageRef.Name
 		fsEv.FetchedAt = systemClock{}.Now()
 		ev = fsEv
 	} else {
@@ -181,9 +181,10 @@ func (o *evalInputs) build(cmdName string) (core.Evidence, policy.Policy, core.T
 		}
 
 		ev = core.Evidence{
-			Image:        imageRef,
-			Attestations: atts,
-			FetchedAt:    systemClock{}.Now(),
+			Artifact:      imageRef.AsArtifact(),
+			Attestations:  atts,
+			SchemaVersion: core.EvidenceSchemaVersion,
+			FetchedAt:     systemClock{}.Now(),
 		}
 	}
 

@@ -128,10 +128,11 @@ func goldenEvidence(t *testing.T) core.Evidence {
 
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	return core.Evidence{
-		Image: core.ImageRef{
+		Artifact: core.ImageRef{
 			Name:   testfix.TestImageName,
 			Digest: testfix.TestImageDigest,
-		},
+		}.AsArtifact(),
+		SchemaVersion: core.EvidenceSchemaVersion,
 		Attestations: []core.Attestation{
 			{Envelope: sigBundle, PredicateType: "sigstore-bundle"},
 			{Envelope: slsaEnv, PredicateType: "https://slsa.dev/provenance/v1"},

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
 import type { Decision, Evidence, TrustRoots, WasmError } from "./types.ts";
-export type { Decision, Evidence, TrustRoots, Reason, EvidenceSummary, ImageRef, Attestation, WorkloadIdentity } from "./types.ts";
+export type { Decision, Evidence, TrustRoots, Reason, EvidenceSummary, ImageRef, ArtifactRef, DigestSet, Finding, Attestation, WorkloadIdentity } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Path resolution

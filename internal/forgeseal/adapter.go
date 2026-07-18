@@ -58,15 +58,17 @@ import (
 //
 // Errors are returned for any missing or malformed file in dir.
 func EvidenceFromOutput(dir string, artifactDigest string) (core.Evidence, error) {
-	ev := core.Evidence{
-		Image: core.ImageRef{
-			Name:   "forgeseal-artifact",
-			Digest: artifactDigest,
-		},
-	}
-
 	// Strip "sha256:" prefix to get the hex portion used in statement subjects.
 	digestHex := strings.TrimPrefix(artifactDigest, "sha256:")
+
+	ev := core.Evidence{
+		Artifact: core.ArtifactRef{
+			Kind:   "container",
+			Name:   "forgeseal-artifact",
+			Digest: core.DigestSet{"sha256": digestHex},
+		},
+		SchemaVersion: core.EvidenceSchemaVersion,
+	}
 
 	// -------------------------------------------------------------------------
 	// 1. SLSA attestation: extract dsseEnvelope from the Sigstore bundle.

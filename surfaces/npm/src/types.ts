@@ -16,6 +16,25 @@ export interface ImageRef {
   digest: string;
 }
 
+/** Digest algorithm (e.g. "sha256") -> hex-encoded digest value. */
+export type DigestSet = Record<string, string>;
+
+export interface ArtifactRef {
+  /** "container" | "mcp-server" | "skill" */
+  kind: string;
+  /** registry/repo:tag, purl, or skill name */
+  name: string;
+  digest: DigestSet;
+  source?: string;
+}
+
+export interface Finding {
+  code: string;
+  severity: Severity;
+  detail?: string;
+  location?: string;
+}
+
 export interface Attestation {
   predicateType: string;
   /** DSSE envelope bytes, base64-encoded */
@@ -49,9 +68,11 @@ export interface TrustRoots {
 }
 
 export interface Evidence {
-  image: ImageRef;
+  artifact: ArtifactRef;
   attestations: Attestation[];
   identity?: WorkloadIdentity;
+  findings?: Finding[];
+  schemaVersion: string;
   /** RFC3339; injected, not read from a clock */
   fetchedAt?: string;
 }
@@ -65,7 +86,7 @@ export interface Reason {
 }
 
 export interface EvidenceSummary {
-  image: ImageRef;
+  artifact: ArtifactRef;
   attestationTypes: string[];
   identityPresent: boolean;
   spiffeID?: string;
