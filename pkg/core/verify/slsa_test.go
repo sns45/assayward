@@ -15,12 +15,12 @@ func TestVerifySLSA_ValidL3(t *testing.T) {
 		t.Fatalf("DecodeDSSE: %v", err)
 	}
 
-	img := core.ImageRef{
+	art := core.ImageRef{
 		Name:   testfix.TestImageName,
 		Digest: testfix.TestImageDigest,
-	}
+	}.AsArtifact()
 
-	result := verify.VerifySLSA(env, img)
+	result := verify.VerifySLSA(env, art)
 
 	if !result.Verified {
 		t.Errorf("Verified = false; want true (Err=%q)", result.Err)
@@ -46,12 +46,12 @@ func TestVerifySLSA_DigestMismatch(t *testing.T) {
 		t.Fatalf("DecodeDSSE: %v", err)
 	}
 
-	img := core.ImageRef{
+	art := core.ImageRef{
 		Name:   testfix.TestImageName,
 		Digest: testfix.TestImageDigest,
-	}
+	}.AsArtifact()
 
-	result := verify.VerifySLSA(env, img)
+	result := verify.VerifySLSA(env, art)
 
 	if result.SubjectDigestMatch {
 		t.Error("SubjectDigestMatch = true; want false (digest should not match)")
@@ -67,12 +67,12 @@ func TestVerifySLSA_GarbagePayload(t *testing.T) {
 		Payload:     []byte("not valid json {{{"),
 	}
 
-	img := core.ImageRef{
+	art := core.ImageRef{
 		Name:   testfix.TestImageName,
 		Digest: testfix.TestImageDigest,
-	}
+	}.AsArtifact()
 
-	result := verify.VerifySLSA(env, img)
+	result := verify.VerifySLSA(env, art)
 
 	if result.Verified {
 		t.Error("Verified = true; want false for garbage payload")

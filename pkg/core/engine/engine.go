@@ -40,7 +40,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	var sigView policy.SignatureResultView
 
 	for _, att := range ev.Attestations {
-		r := sigVerifier.Verify(att, ev.Image, roots)
+		r := sigVerifier.Verify(att, ev.Artifact, roots)
 		if r.Available {
 			sigView.Available = true
 		}
@@ -79,7 +79,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 
 		switch {
 		case strings.Contains(predType, "slsa.dev/provenance"):
-			slsaResult = verify.VerifySLSA(env, ev.Image)
+			slsaResult = verify.VerifySLSA(env, ev.Artifact)
 		case strings.Contains(predType, "cyclonedx"):
 			sbomResult = verify.VerifySBOM(env)
 		case strings.Contains(predType, "openvex"):
@@ -92,7 +92,7 @@ func Evaluate(ev core.Evidence, pol policy.Policy, roots core.TrustRoots, clk co
 	// -------------------------------------------------------------------------
 	var idResult verify.IdentityResult
 	if ev.Identity != nil {
-		idResult = verify.VerifyIdentity(*ev.Identity, ev.Image, roots)
+		idResult = verify.VerifyIdentity(*ev.Identity, ev.Artifact, roots)
 	}
 
 	// -------------------------------------------------------------------------
@@ -177,7 +177,7 @@ func buildSummary(ev core.Evidence) core.EvidenceSummary {
 	}
 
 	return core.EvidenceSummary{
-		Image:            ev.Image,
+		Artifact:         ev.Artifact,
 		AttestationTypes: types,
 		IdentityPresent:  identityPresent,
 		SPIFFEID:         spiffeID,

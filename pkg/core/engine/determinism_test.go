@@ -204,7 +204,7 @@ func TestEvaluateDeterminism_MultiCVE_VEX(t *testing.T) {
 	// Substitute the single-CVE VEX fixture with our multi-CVE envelope.
 	// All other attestations remain from goldenEvidence.
 	ev := core.Evidence{
-		Image: base.Image,
+		Artifact: base.Artifact,
 		Attestations: []core.Attestation{
 			{Envelope: base.Attestations[0].Envelope, PredicateType: base.Attestations[0].PredicateType},
 			{Envelope: base.Attestations[1].Envelope, PredicateType: base.Attestations[1].PredicateType},

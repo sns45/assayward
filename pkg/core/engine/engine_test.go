@@ -13,10 +13,10 @@ func TestEvaluateEmpty(t *testing.T) {
 	clk := core.FixedClock{T: time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)}
 
 	ev := core.Evidence{
-		Image: core.ImageRef{
+		Artifact: core.ImageRef{
 			Name:   "registry.example.com/myapp:latest",
 			Digest: "sha256:abc123",
-		},
+		}.AsArtifact(),
 		Attestations: []core.Attestation{
 			{
 				PredicateType: "https://slsa.dev/provenance/v1",
@@ -60,11 +60,11 @@ func TestEvaluateEmpty(t *testing.T) {
 	}
 
 	// EvidenceSummary must reflect the evidence.
-	if d.Evidence.Image.Name != ev.Image.Name {
-		t.Errorf("evidence image name: expected %q, got %q", ev.Image.Name, d.Evidence.Image.Name)
+	if d.Evidence.Artifact.Name != ev.Artifact.Name {
+		t.Errorf("evidence artifact name: expected %q, got %q", ev.Artifact.Name, d.Evidence.Artifact.Name)
 	}
-	if d.Evidence.Image.Digest != ev.Image.Digest {
-		t.Errorf("evidence image digest: expected %q, got %q", ev.Image.Digest, d.Evidence.Image.Digest)
+	if d.Evidence.Artifact.Digest["sha256"] != ev.Artifact.Digest["sha256"] {
+		t.Errorf("evidence artifact digest: expected %q, got %q", ev.Artifact.Digest["sha256"], d.Evidence.Artifact.Digest["sha256"])
 	}
 	if len(d.Evidence.AttestationTypes) != 1 {
 		t.Errorf("expected 1 attestation type, got %d", len(d.Evidence.AttestationTypes))

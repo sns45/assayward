@@ -37,8 +37,8 @@ type SLSAResult struct {
 	BuildLevel int
 
 	// SubjectDigestMatch is true when ANY subject in the statement has a
-	// "sha256" digest that matches the hex portion of img.Digest
-	// (case-insensitive comparison, stripping the "sha256:" prefix).
+	// "sha256" digest that matches art.Digest["sha256"] (case-insensitive
+	// comparison). v0.1: sha256-only; Task 4 adds algorithm-aware matching.
 	SubjectDigestMatch bool
 
 	// Err is a non-empty human-readable error string when the statement or
@@ -48,8 +48,12 @@ type SLSAResult struct {
 
 // VerifySLSA parses the in-toto Statement carried in env.Payload, extracts
 // SLSA provenance fields, and checks whether the statement's subject digest
-// matches the image digest in img.
-func VerifySLSA(env DecodedEnvelope, img core.ImageRef) SLSAResult {
+// matches the artifact digest in art.
+//
+// v0.1: only the "sha256" entry of art.Digest is compared (matching the prior
+// ImageRef-based behavior). Algorithm-aware matching across all DigestSet
+// entries is deferred to Task 4.
+func VerifySLSA(env DecodedEnvelope, art core.ArtifactRef) SLSAResult {
 	// Parse the Statement using protojson (required for the proto-based Statement type).
 	stmt := &attestv1.Statement{}
 	if err := protojson.Unmarshal(env.Payload, stmt); err != nil {
@@ -59,8 +63,9 @@ func VerifySLSA(env DecodedEnvelope, img core.ImageRef) SLSAResult {
 		}
 	}
 
-	// Extract the image digest hex to compare (strip the "sha256:" prefix).
-	imgDigestHex := strings.ToLower(strings.TrimPrefix(img.Digest, "sha256:"))
+	// Extract the sha256 hex to compare. DigestSet already stores bare hex
+	// (no "sha256:" prefix to strip).
+	imgDigestHex := strings.ToLower(art.Digest["sha256"])
 
 	// Check whether any subject digest matches.
 	subjectDigestMatch := false

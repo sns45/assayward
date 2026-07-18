@@ -20,10 +20,10 @@ func TestSigstoreVerifier_ValidBundle(t *testing.T) {
 
 	v := verify.NewSignatureVerifier()
 	att := core.Attestation{Envelope: bundleBytes}
-	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
+	art := core.ImageRef{Name: "test", Digest: "sha256:0000"}.AsArtifact()
 	roots := core.TrustRoots{SigstoreTUF: rootBytes}
 
-	result := v.Verify(att, img, roots)
+	result := v.Verify(att, art, roots)
 
 	if !result.Verified {
 		t.Fatalf("expected Verified=true, got false; Err=%q", result.Err)
@@ -51,10 +51,10 @@ func TestSigstoreVerifier_TamperedBundle(t *testing.T) {
 
 	v := verify.NewSignatureVerifier()
 	att := core.Attestation{Envelope: tampered}
-	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
+	art := core.ImageRef{Name: "test", Digest: "sha256:0000"}.AsArtifact()
 	roots := core.TrustRoots{SigstoreTUF: rootBytes}
 
-	result := v.Verify(att, img, roots)
+	result := v.Verify(att, art, roots)
 
 	if result.Verified {
 		t.Fatal("expected Verified=false for tampered bundle, got true")
@@ -141,10 +141,10 @@ func TestSigstore_TamperedSignature_CryptoReject(t *testing.T) {
 
 	v := verify.NewSignatureVerifier()
 	att := core.Attestation{Envelope: tamperedBundle}
-	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
+	art := core.ImageRef{Name: "test", Digest: "sha256:0000"}.AsArtifact()
 	roots := core.TrustRoots{SigstoreTUF: rootBytes}
 
-	result := v.Verify(att, img, roots)
+	result := v.Verify(att, art, roots)
 
 	if result.Verified {
 		t.Fatal("expected Verified=false for crypto-tampered bundle, got true — CRITICAL: verifier accepted forged signature")
@@ -166,10 +166,10 @@ func TestSigstoreVerifier_TUFFallback_AttemptsMade(t *testing.T) {
 
 	v := verify.NewSignatureVerifier()
 	att := core.Attestation{Envelope: bundleBytes}
-	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
+	art := core.ImageRef{Name: "test", Digest: "sha256:0000"}.AsArtifact()
 	roots := core.TrustRoots{} // empty SigstoreTUF — triggers TUF fallback
 
-	result := v.Verify(att, img, roots)
+	result := v.Verify(att, art, roots)
 
 	// The verifier must NOT return the old "no trust material" fast-fail error.
 	// It must attempt TUF resolution first (and either succeed or fail with a
@@ -199,11 +199,11 @@ func TestSigstoreVerifier_TUFFallback_PublicGood(t *testing.T) {
 
 	v := verify.NewSignatureVerifier()
 	att := core.Attestation{Envelope: bundleBytes}
-	img := core.ImageRef{Name: "test", Digest: "sha256:0000"}
+	art := core.ImageRef{Name: "test", Digest: "sha256:0000"}.AsArtifact()
 	// Empty SigstoreTUF: the verifier must fetch the trusted root from TUF.
 	roots := core.TrustRoots{}
 
-	result := v.Verify(att, img, roots)
+	result := v.Verify(att, art, roots)
 
 	if !result.Verified {
 		t.Fatalf("expected Verified=true with public-good TUF fallback, got false; Err=%q", result.Err)

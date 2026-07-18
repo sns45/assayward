@@ -27,9 +27,9 @@ func NewSignatureVerifier() SignatureVerifier {
 // the call falls through to the fail-closed stub: sigstore-go cannot be compiled
 // for WASM (it transitively imports unix-only syscalls via in-toto-golang), so
 // callers that require keyless verification MUST treat this as a failure.
-func (v *wasmVerifier) Verify(att core.Attestation, img core.ImageRef, roots core.TrustRoots) SignatureResult {
+func (v *wasmVerifier) Verify(att core.Attestation, art core.ArtifactRef, roots core.TrustRoots) SignatureResult {
 	// Try keyed (self-signed-CA) path first — this is WASM-safe stdlib crypto.
-	if result, handled := VerifyKeyedBundle(att, img, roots); handled {
+	if result, handled := VerifyKeyedBundle(att, art, roots); handled {
 		return result
 	}
 

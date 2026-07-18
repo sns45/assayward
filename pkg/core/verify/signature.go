@@ -23,5 +23,5 @@ type SignatureResult struct {
 // (sigstore_native.go, sigstore_wasm.go, etc.).
 type SignatureVerifier interface {
 	// Verify checks a Sigstore bundle for one attestation against injected roots.
-	Verify(att core.Attestation, img core.ImageRef, roots core.TrustRoots) SignatureResult
+	Verify(att core.Attestation, art core.ArtifactRef, roots core.TrustRoots) SignatureResult
 }
