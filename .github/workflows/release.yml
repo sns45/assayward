@@ -1,8 +1,11 @@
 # Release: on a v* tag, build and publish all distribution artifacts.
 #
 # Required repository secrets (add under Settings -> Secrets and variables -> Actions):
-#   HOMEBREW_TAP_GITHUB_TOKEN   PAT with `repo` scope on sns45/homebrew-tap (Homebrew formula push).
-#   SCOOP_GITHUB_TOKEN          PAT with `repo` scope on sns45/scoop-bucket  (optional; Windows Scoop).
+#   DOPPLER_TOKEN                Read-only Doppler service token scoped to the release-tooling/prd
+#                                config, which holds HOMEBREW_TAP_GITHUB_TOKEN and SCOOP_GITHUB_TOKEN
+#                                (PATs for sns45/homebrew-tap and sns45/scoop-bucket). Injected into
+#                                the goreleaser step at runtime via `doppler run`, so those two tokens
+#                                no longer need to be GitHub secrets.
 #   NPM_TOKEN                   npm automation token (optional; publishes @sns45/assayward).
 # GITHUB_TOKEN is provided automatically (GitHub Releases + GHCR image push).
 name: release
@@ -33,15 +36,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: goreleaser release (binaries, Homebrew, Scoop, nfpm, Docker)
+      - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
-          args: release --clean
+          install-only: true
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v3
+      - name: goreleaser release (binaries, Homebrew, Scoop, nfpm, Docker) — secrets via Doppler
+        run: doppler run -- goreleaser release --clean
         env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          SCOOP_GITHUB_TOKEN: ${{ secrets.SCOOP_GITHUB_TOKEN }}
 
   wasm:
     runs-on: ubuntu-latest
