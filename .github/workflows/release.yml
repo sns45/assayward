@@ -44,7 +44,12 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v3
       - name: goreleaser release (binaries, Homebrew, Scoop, nfpm, Docker) — secrets via Doppler
-        run: doppler run -- goreleaser release --clean
+        run: |
+          # dopplerhq/cli-action installs the doppler binary into ./bin, which
+          # would make the tree dirty and abort goreleaser. Hide it from git's
+          # dirty check without a tracked change.
+          printf 'bin/\n' >> "$(git rev-parse --git-dir)/info/exclude"
+          doppler run -- goreleaser release --clean
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
